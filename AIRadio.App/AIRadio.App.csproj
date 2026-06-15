@@ -1,0 +1,17 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <ItemGroup>
+    <ProjectReference Include="..\AIRadio.Core\AIRadio.Core.csproj" />
+    <ProjectReference Include="..\AIRadio.Infrastructure\AIRadio.Infrastructure.csproj" />
+  </ItemGroup>
+
+  <PropertyGroup>
+    <!-- Debug=コンソール（全ログをストリーム / Mac のコンソール起動踏襲）, Release=WinExe（コンソールなしのトレイ常駐。トレイ UI は W9）。 -->
+    <OutputType Condition="'$(Configuration)' == 'Debug'">Exe</OutputType>
+    <OutputType Condition="'$(Configuration)' == 'Release'">WinExe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+  </PropertyGroup>
+
+</Project>

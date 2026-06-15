@@ -25,7 +25,7 @@ AI DJ が気ままに喋り、Spotify の曲をかける。論理的進行管理
 | カテゴリ | 採用 |
 |---|---|
 | 言語 / 並行 | C# 13 / .NET 10。async-await + `Task` + **明示的 `CancellationToken`**（Swift の構造的並行の暗黙伝播を明示スレッディングで再現）|
-| ビルド | dotnet SDK / MSBuild。3 プロジェクト（Core / Infrastructure / App）+ TestSupport + テスト 2 |
+| ビルド | **Visual Studio 2026** / .NET 10 SDK / MSBuild。3 プロジェクト（Core / Infrastructure / App）+ TestSupport + テスト 2 |
 | UI | Avalonia 12（**タスクトレイ常駐**）。`TrayIcon` + `NativeMenu`。専用ウィンドウなし（`ShutdownMode.OnExplicitShutdown`）|
 | 設定 | YAML = **YamlDotNet** + `record`。**汎用 `YamlConfigLoader<T>` 1個に集約**（ファイルごとのローダ量産は禁止）|
 | HTTP | `System.Net.Http.HttpClient`（Gemini / Spotify Web API / News RSS / 気象庁）|
@@ -36,7 +36,7 @@ AI DJ が気ままに喋り、Spotify の曲をかける。論理的進行管理
 | LLM | **Gemini**（`gemini-3.1-flash-lite`, Google API 無料枠）。`ILLMBackend` 抽象で差し替え可（将来 Ollama 等）|
 | TTS | **VOICEVOX**（ローカル HTTP, BYO 手動起動）。`ITTSBackend` 抽象。**Windows 専用追加で AquesTalk1（初代）**を最後に実装。DJ ごとに `djs.yaml` の `tts_backend` で選択 |
 | テスト | **xUnit**。`dotnet test` グリーンを各スライスの完了条件とする |
-| ログ | 進行ログは標準出力（`Console`）。秘密値は出力しない（§3-3）。`ILogger` 化は将来 |
+| ログ | 進行ログ＋**生成された会話/台本内容**を標準出力にストリーム（`IRadioLog` seam、実装 `ConsoleRadioLog`）。**Debug ビルドはコンソール起動で全ログが流れる**（`OutputType` を Debug=`Exe` / Release=`WinExe` で切替。Mac 版のコンソール起動を踏襲）。秘密値はマスク（§3-3）。`ILogger`／ファイル出力は将来 |
 
 ---
 

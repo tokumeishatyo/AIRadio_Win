@@ -1,0 +1,8 @@
+<Solution>
+  <Project Path="AIRadio.App/AIRadio.App.csproj" />
+  <Project Path="AIRadio.Core.Tests/AIRadio.Core.Tests.csproj" />
+  <Project Path="AIRadio.Core/AIRadio.Core.csproj" />
+  <Project Path="AIRadio.Infrastructure.Tests/AIRadio.Infrastructure.Tests.csproj" />
+  <Project Path="AIRadio.Infrastructure/AIRadio.Infrastructure.csproj" />
+  <Project Path="AIRadio.TestSupport/AIRadio.TestSupport.csproj" />
+</Solution>
