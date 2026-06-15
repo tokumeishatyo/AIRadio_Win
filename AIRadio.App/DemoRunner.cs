@@ -9,6 +9,7 @@ namespace AIRadio.App;
 //   spotify      : 検索 → プレフライト（isPlayable）表示（W2）
 //   spotify-play : 検索 → 先頭曲を再生 → 数秒後に停止（W3。要 Premium + アクティブデバイス）
 //   theme        : BGM ダッキング演出（tagline→BGM→duck→発話→outro→停止）（W4。要 VOICEVOX + Premium）
+//   news         : ニュース見出し + 天気を取得して定型原稿を生成・表示（W5。fail-tolerant、音声なし）
 internal static class DemoRunner
 {
     private static readonly IRadioLog Log = new ConsoleRadioLog();
@@ -24,13 +25,14 @@ internal static class DemoRunner
             "spotify" => await RunSpotifySearchAsync(),
             "spotify-play" => await RunSpotifyPlayAsync(),
             "theme" => await RunThemeDemoAsync(),
+            "news" => await RunNewsDemoAsync(),
             _ => Unknown(mode),
         };
     }
 
     private static int Unknown(string mode)
     {
-        Log.Log($"不明なモード: {mode}（tts / spotify-auth / spotify / spotify-play / theme）");
+        Log.Log($"不明なモード: {mode}（tts / spotify-auth / spotify / spotify-play / theme / news）");
         return 2;
     }
 
@@ -229,6 +231,34 @@ internal static class DemoRunner
             Log.Log($"エラー [{ex.Code}]: {ex.Message}");
             return 1;
         }
+    }
+
+    private static async Task<int> RunNewsDemoAsync()
+    {
+        Log.Log("ケイラボAIラジオ (Windows) — W5 ニュース・天気デモ（fail-tolerant、音声なし）");
+        var configPath = Path.Combine(ConfigDir, "research.yaml");
+        ResearchConfig config;
+        try
+        {
+            config = ResearchConfig.LoadFile(configPath);
+        }
+        catch (ConfigException ex)
+        {
+            Log.Log($"設定エラー [{ex.Code}]: {ex.Message}（{configPath}）");
+            return 1;
+        }
+
+        IHttpClient http = new HttpClientAdapter();
+        var news = new NewsRssSource(config.NewsRssUrl, http, config.NewsMaxItems);
+        var weather = new JmaWeatherSource(config.WeatherAreaCode, config.WeatherAreaName, http);
+        var provider = new NewsWeatherProvider(news, weather, config.AnnouncementTemplate);
+
+        Log.Log($"取得中…（RSS={config.NewsRssUrl} / 天気={config.WeatherAreaName}[{config.WeatherAreaCode}]）");
+        var announcement = await provider.AnnouncementAsync();
+        Log.Log("--- ニュース原稿 ---");
+        Log.Log(announcement);
+        Log.Log("W5 OK（取得失敗時はフォールバック文言）。");
+        return 0;
     }
 
     private static SpotifyConfig? TryLoadSpotify()

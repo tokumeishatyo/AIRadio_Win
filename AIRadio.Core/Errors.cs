@@ -73,6 +73,22 @@ public sealed class TtsException : RadioException
         new("E-TTS-SYNTHESIS-FAILED-001", $"音声合成に失敗しました: {detail}");
 }
 
+/// <summary>リサーチ（ニュース / 天気）に関するエラー。放送事故ゼロ系のため呼び出し側で握り潰す（fail-tolerant）。</summary>
+public sealed class ResearchException : RadioException
+{
+    public override string Code { get; }
+
+    private ResearchException(string code, string message) : base(message) => Code = code;
+
+    /// <summary>ニュースの取得・解析に失敗。</summary>
+    public static ResearchException NewsFetchFailed(string detail) =>
+        new("E-NEWS-FETCH-FAILED-001", $"ニュースの取得に失敗しました: {detail}");
+
+    /// <summary>天気予報の取得・解析に失敗。</summary>
+    public static ResearchException WeatherFetchFailed(string detail) =>
+        new("E-WX-FETCH-FAILED-001", $"天気予報の取得に失敗しました: {detail}");
+}
+
 /// <summary>音声再生に関するエラー。</summary>
 public sealed class AudioException : RadioException
 {
