@@ -13,6 +13,34 @@ public sealed class EchoLLM : ILLMBackend
         => Task.FromResult("echo: " + request.Prompt);
 }
 
+/// <summary>用意した応答を順番に返す LLM（記録 fake）。応答が尽きたら EmptyResponse を投げる。</summary>
+public sealed class ScriptedLLM : ILLMBackend
+{
+    private readonly object _lock = new();
+    private readonly Queue<string> _responses;
+    private readonly List<LLMRequest> _requests = new();
+
+    public ScriptedLLM(params string[] responses) => _responses = new Queue<string>(responses);
+
+    public IReadOnlyList<LLMRequest> Requests
+    {
+        get { lock (_lock) { return _requests.ToList(); } }
+    }
+
+    public Task<string> GenerateAsync(LLMRequest request, CancellationToken ct = default)
+    {
+        lock (_lock)
+        {
+            _requests.Add(request);
+            if (_responses.Count == 0)
+            {
+                throw LlmException.EmptyResponse();
+            }
+            return Task.FromResult(_responses.Dequeue());
+        }
+    }
+}
+
 /// <summary>テキストと話者 ID から決定論的なダミー WAV データを返す TTS。</summary>
 public sealed class InMemoryTTS : ITTSBackend
 {

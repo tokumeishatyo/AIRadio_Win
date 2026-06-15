@@ -1,0 +1,16 @@
+# コーナーテンプレートの一覧。基本パターン: テーマについて DJ 二人が会話し、最後に一曲かける。
+# W6 は free_talk のみ。letter / guest / artist_feature とテーマプール（themes）・時報リード文（lead_in）は後続スライス。
+# fallback_track_uri: 候補曲が全滅したときの保険（共有 URL / spotify:track: / 裸 ID いずれも可）。
+# play_seconds: 締めの曲を頭から何秒かけるか。0 = 曲の長さぶんフル再生（終端は位置読み直しで検知）。
+corners:
+  - id: free_talk
+    title: "フリートーク"
+    theme: "最近ちょっと気になっていること"
+    format: free_talk
+    dj_ids: [zundamon, metan]
+    target_minutes: 5
+    chars_per_minute: 320
+    song_prompt_hint: "テーマの余韻に合う、よく知られた邦楽・洋楽"
+    fallback_track_uri: "spotify:track:5jsqaNOAbeBG5QYL7JpySJ"
+    volume: 100
+    play_seconds: 0

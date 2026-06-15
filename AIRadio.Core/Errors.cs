@@ -73,6 +73,33 @@ public sealed class TtsException : RadioException
         new("E-TTS-SYNTHESIS-FAILED-001", $"音声合成に失敗しました: {detail}");
 }
 
+/// <summary>
+/// LLM（Gemini）に関するエラー。API キー欠落は fail-fast、それ以外は fail-tolerant（コーナー中断 + 静寂、放送は継続）。
+/// </summary>
+public sealed class LlmException : RadioException
+{
+    public override string Code { get; }
+
+    private LlmException(string code, string message) : base(message) => Code = code;
+
+    /// <summary>API キーが未設定（<c>llm.local.yaml</c> なし / api_key 空 / プレースホルダのまま）。</summary>
+    public static LlmException KeyMissing() =>
+        new("E-LLM-KEY-MISSING-001",
+            "Gemini API キーが見つかりません（config/llm.local.yaml.sample をコピーして config/llm.local.yaml に api_key を設定してください）");
+
+    /// <summary>generateContent が非 2xx / 通信失敗 / 応答解釈不能。</summary>
+    public static LlmException ApiFailed(string detail) =>
+        new("E-LLM-API-FAILED-001", $"LLM リクエストに失敗しました: {detail}");
+
+    /// <summary>LLM 応答にテキストがない。</summary>
+    public static LlmException EmptyResponse() =>
+        new("E-LLM-EMPTY-RESPONSE-001", "LLM の応答にテキストが含まれていません");
+
+    /// <summary>LLM 応答を台本として解釈できない（行数不足）。</summary>
+    public static LlmException ScriptParseFailed(string detail) =>
+        new("E-LLM-SCRIPT-PARSE-FAILED-001", $"LLM 応答を台本として解釈できませんでした: {detail}");
+}
+
 /// <summary>リサーチ（ニュース / 天気）に関するエラー。放送事故ゼロ系のため呼び出し側で握り潰す（fail-tolerant）。</summary>
 public sealed class ResearchException : RadioException
 {

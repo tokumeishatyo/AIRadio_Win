@@ -1,4 +1,3 @@
-using System.Globalization;
 using System.Text;
 
 namespace AIRadio.Core;
@@ -145,7 +144,7 @@ public sealed class ThemeSequencer
                 current.Clear();
             }
         }
-        if (TrimHorizontal(current.ToString()).Length > 0)
+        if (Whitespace.TrimHorizontal(current.ToString()).Length > 0)
         {
             sentences.Add(current.ToString());
         }
@@ -171,31 +170,8 @@ public sealed class ThemeSequencer
         }
 
         return chunks
-            .Select(TrimHorizontal)
+            .Select(Whitespace.TrimHorizontal)
             .Where(c => c.Length > 0)
             .ToList();
     }
-
-    /// <summary>
-    /// 水平方向の空白（スペース・タブ・Unicode Zs）だけを両端からトリムする。Swift の
-    /// <c>CharacterSet.whitespaces</c> 相当で、改行類（LF/CR/VT/FF/NEL/LS/PS）は**保持**する
-    /// （Mac 版が <c>.whitespacesAndNewlines</c> ではなく <c>.whitespaces</c> を使うのに合わせる）。
-    /// </summary>
-    private static string TrimHorizontal(string s)
-    {
-        int start = 0, end = s.Length;
-        while (start < end && IsHorizontalWhitespace(s[start]))
-        {
-            start++;
-        }
-        while (end > start && IsHorizontalWhitespace(s[end - 1]))
-        {
-            end--;
-        }
-        return s[start..end];
-    }
-
-    /// <summary>Swift の <c>CharacterSet.whitespaces</c>（Unicode Zs カテゴリ + 水平タブ）に一致。改行類は含めない。</summary>
-    private static bool IsHorizontalWhitespace(char c) =>
-        c == '\t' || char.GetUnicodeCategory(c) == UnicodeCategory.SpaceSeparator;
 }

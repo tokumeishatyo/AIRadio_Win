@@ -10,6 +10,7 @@ namespace AIRadio.App;
 //   spotify-play : 検索 → 先頭曲を再生 → 数秒後に停止（W3。要 Premium + アクティブデバイス）
 //   theme        : BGM ダッキング演出（tagline→BGM→duck→発話→outro→停止）（W4。要 VOICEVOX + Premium）
 //   news         : ニュース見出し + 天気を取得して定型原稿を生成・表示（W5。fail-tolerant、音声なし）
+//   corner       : Gemini 台本 → 2-DJ 会話 → 締めに一曲（W6。要 Gemini キー + VOICEVOX + Premium）
 internal static class DemoRunner
 {
     private static readonly IRadioLog Log = new ConsoleRadioLog();
@@ -26,13 +27,14 @@ internal static class DemoRunner
             "spotify-play" => await RunSpotifyPlayAsync(),
             "theme" => await RunThemeDemoAsync(),
             "news" => await RunNewsDemoAsync(),
+            "corner" => await RunCornerDemoAsync(),
             _ => Unknown(mode),
         };
     }
 
     private static int Unknown(string mode)
     {
-        Log.Log($"不明なモード: {mode}（tts / spotify-auth / spotify / spotify-play / theme / news）");
+        Log.Log($"不明なモード: {mode}（tts / spotify-auth / spotify / spotify-play / theme / news / corner）");
         return 2;
     }
 
@@ -260,6 +262,90 @@ internal static class DemoRunner
         Log.Log("W5 OK（取得失敗時はフォールバック文言）。");
         return 0;
     }
+
+    private static async Task<int> RunCornerDemoAsync()
+    {
+        Log.Log("ケイラボAIラジオ (Windows) — W6 トークコーナー デモ（Gemini 台本 → 2-DJ 会話 → 一曲）");
+
+        LlmConfig llmConfig;
+        try
+        {
+            llmConfig = LlmConfig.LoadFiles(
+                Path.Combine(ConfigDir, "llm.yaml"), Path.Combine(ConfigDir, "llm.local.yaml"));
+        }
+        catch (RadioException ex) // ConfigException（model 欠落）/ LlmException（キー欠落）
+        {
+            Log.Log($"設定エラー [{ex.Code}]: {ex.Message}");
+            return 1;
+        }
+
+        var cfg = TryLoadSpotify();
+        if (cfg is null)
+        {
+            return 1;
+        }
+
+        TtsConfig ttsConfig;
+        IReadOnlyList<DjProfile> djs;
+        IReadOnlyList<CornerTemplate> corners;
+        try
+        {
+            ttsConfig = TtsConfig.LoadFile(Path.Combine(ConfigDir, "tts.yaml"));
+            djs = DjsConfig.LoadFile(Path.Combine(ConfigDir, "djs.yaml"));
+            corners = CornersConfig.LoadFile(Path.Combine(ConfigDir, "corners.yaml"));
+        }
+        catch (ConfigException ex)
+        {
+            Log.Log($"設定エラー [{ex.Code}]: {ex.Message}");
+            return 1;
+        }
+
+        var corner = corners.FirstOrDefault(c => c.Format == CornerFormat.FreeTalk);
+        if (corner is null)
+        {
+            Log.Log("free_talk コーナーが corners.yaml にありません。");
+            return 1;
+        }
+
+        IHttpClient http = new HttpClientAdapter();
+        var auth = MakeAuth(cfg);
+        var llm = new GeminiLLMBackend(llmConfig, http);
+        ITTSBackend tts = new VoicevoxTTS(ttsConfig.Endpoint, http, ttsConfig.SpeedScale);
+        IAudioPlayer audio = new NAudioPlayer((float)ttsConfig.PlaybackVolume);
+        var searcher = new SpotifyWebSearcher(auth, http, cfg.Market);
+        var spotify = new WebApiSpotifyController(auth, http, preferredDeviceName: cfg.DeviceName);
+        var engine = new CornerEngine(
+            llm, tts, audio, searcher, spotify, new SystemClock(),
+            temperature: llmConfig.Temperature,
+            onEvent: e => Log.Log(FormatCornerEvent(e)));
+
+        try
+        {
+            Log.Log($"コーナー「{corner.Title}」（テーマ: {corner.Theme}）を開始します…");
+            await engine.RunAsync(corner, djs);
+            Log.Log("コーナー完了。W6 OK。");
+            return 0;
+        }
+        catch (RadioException ex)
+        {
+            Log.Log($"エラー [{ex.Code}]: {ex.Message}");
+            return 1;
+        }
+    }
+
+    private static string FormatCornerEvent(CornerEvent e) => e switch
+    {
+        CornerEvent.ThemeSelected x => $"テーマ: {x.Theme}",
+        CornerEvent.SongPicked x => $"締めの曲（プレフライト済み）: {Label(x.Track)}",
+        CornerEvent.ScriptReady x => $"台本生成完了: {x.LineCount} 行 / {x.TotalCharacters} 文字",
+        CornerEvent.Line x => $"  {x.DialogueLine.DjId}: {x.DialogueLine.Text}",
+        CornerEvent.SongStarted x => $"♪ 再生中: {Label(x.Track)}",
+        CornerEvent.SongFinished x => $"♪ 曲終了（検知: {x.Reason}）",
+        _ => "",
+    };
+
+    private static string Label(TrackInfo track)
+        => track.Title.Length == 0 ? track.Uri : $"{track.Artist} / {track.Title}";
 
     private static SpotifyConfig? TryLoadSpotify()
     {

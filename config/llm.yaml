@@ -1,0 +1,6 @@
+# LLM（台本生成）設定。API キーは llm.local.yaml（gitignore 対象、サンプル参照）に置く。
+llm:
+  provider: gemini
+  model: "gemini-3.1-flash-lite"
+  endpoint: "https://generativelanguage.googleapis.com/"
+  temperature: 0.9

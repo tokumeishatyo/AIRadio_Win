@@ -1,0 +1,6 @@
+# Gemini API キーの設定サンプル。
+# 1) このファイルをコピーする:  copy config\llm.local.yaml.sample config\llm.local.yaml
+# 2) Google AI Studio (https://aistudio.google.com/apikey) で発行したキーを api_key に貼る。
+# llm.local.yaml は .gitignore 対象（機密、CLAUDE.md §3-3）。
+llm:
+  api_key: "PASTE-YOUR-GEMINI-API-KEY-HERE"
