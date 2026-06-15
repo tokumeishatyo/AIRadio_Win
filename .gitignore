@@ -1,0 +1,34 @@
+# ===== Build output =====
+[Bb]in/
+[Oo]bj/
+*.user
+*.suo
+.vs/
+artifacts/
+
+# ===== Test =====
+[Tt]est[Rr]esults/
+*.trx
+*.coverage
+coverage*/
+
+# ===== Secrets / local config (NEVER commit) =====
+# 機密値を含む設定（API キー / client secret / refresh トークン等）
+*.local.yaml
+config/*.local.yaml
+# .sample（雛形・機密なし）はコミット対象なので除外しない
+
+# ===== Tokens / DPAPI encrypted blobs =====
+*.token
+tokens/
+
+# ===== Runtime long-term memory =====
+journal.local.yaml
+
+# ===== AquesTalk native binaries (licensed; not redistributed) =====
+native/
+
+# ===== OS / editor =====
+Thumbs.db
+.DS_Store
+*.swp
