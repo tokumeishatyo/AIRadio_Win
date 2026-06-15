@@ -6,6 +6,7 @@ using AIRadio.Infrastructure;
 //   spotify-auth        : ブラウザで Spotify PKCE ログイン → refresh を DPAPI 保管（W2）
 //   spotify             : 検索 → プレフライト（isPlayable）表示（W2）
 //   spotify-play        : 検索 → 先頭曲を再生 → 数秒後に停止（W3。要 Premium + アクティブデバイス）
+//   theme               : BGM ダッキング演出（tagline→BGM→duck→発話→outro→停止）（W4。要 VOICEVOX + Premium）
 // Debug ビルドはコンソールに全ログがストリームする（Mac 版のコンソール起動を踏襲）。
 
 IRadioLog log = new ConsoleRadioLog();
@@ -22,8 +23,10 @@ switch (mode)
         return await RunSpotifySearchAsync();
     case "spotify-play":
         return await RunSpotifyPlayAsync();
+    case "theme":
+        return await RunThemeDemoAsync();
     default:
-        log.Log($"不明なモード: {mode}（tts / spotify-auth / spotify / spotify-play）");
+        log.Log($"不明なモード: {mode}（tts / spotify-auth / spotify / spotify-play / theme）");
         return 2;
 }
 
@@ -152,6 +155,69 @@ async Task<int> RunSpotifyPlayAsync()
         await Task.Delay(TimeSpan.FromSeconds(playSeconds));
         await spotify.PauseAsync();
         log.Log("停止しました。W3 再生デモ完了。");
+        return 0;
+    }
+    catch (RadioException ex)
+    {
+        log.Log($"エラー [{ex.Code}]: {ex.Message}");
+        return 1;
+    }
+}
+
+async Task<int> RunThemeDemoAsync()
+{
+    var cfg = TryLoadSpotify();
+    if (cfg is null)
+    {
+        return 1;
+    }
+    var ttsConfigPath = Path.Combine(configDir, "tts.yaml");
+    TtsConfig ttsConfig;
+    try
+    {
+        ttsConfig = TtsConfig.LoadFile(ttsConfigPath);
+    }
+    catch (ConfigException ex)
+    {
+        log.Log($"設定エラー [{ex.Code}]: {ex.Message}（{ttsConfigPath}）");
+        return 1;
+    }
+
+    var auth = MakeAuth(cfg);
+    IHttpClient http = new HttpClientAdapter();
+    var searcher = new SpotifyWebSearcher(auth, http, cfg.Market);
+    ITTSBackend tts = new VoicevoxTTS(ttsConfig.Endpoint, http, ttsConfig.SpeedScale);
+    IAudioPlayer audio = new NAudioPlayer((float)ttsConfig.PlaybackVolume);
+    var spotify = new WebApiSpotifyController(auth, http, preferredDeviceName: cfg.DeviceName);
+    var sequencer = new ThemeSequencer(tts, audio, spotify, new SystemClock());
+
+    const int zundamonSpeakerId = 3;
+    const string announcement =
+        "今日も一日おつかれさまなのだ。作業のおともに、ゆったりとした音楽をお届けするのだ。" +
+        "肩の力を抜いて、のんびり聴いてほしいのだ。";
+    try
+    {
+        log.Log("BGM 用トラックを検索します…");
+        var results = await searcher.SearchAsync("YOASOBI", 5);
+        var bgm = results.FirstOrDefault(t => t.IsPlayable) ?? results.FirstOrDefault();
+        if (bgm is null)
+        {
+            log.Log("BGM 用トラックが見つかりませんでした。");
+            return 1;
+        }
+
+        var theme = new ThemeConfig(
+            Tagline: "ケイラボAIラジオ、オープニングです。",
+            TrackUri: bgm.Uri,
+            IntroSeconds: 5,
+            Volume: 80,
+            DuckedVolume: 30,
+            OutroSeconds: 5);
+
+        log.Log($"BGM: {bgm.Title} / {bgm.Artist}  {bgm.Uri}");
+        log.Log("テーマ演出（tagline → BGM → ダッキング → 発話 → アウトロ → 停止）を開始します…");
+        await sequencer.RunAsync(theme, announcement, zundamonSpeakerId);
+        log.Log("テーマ演出完了。W4 OK。");
         return 0;
     }
     catch (RadioException ex)
