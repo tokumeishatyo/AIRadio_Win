@@ -37,20 +37,36 @@ public static class ProgramConfig
     {
         var kind = ParseKind(s.Type);
         string? cornerId = null;
-        if (kind == SegmentKind.Talk)
+        SongSegmentSpec? song = null;
+        switch (kind)
         {
-            if (string.IsNullOrEmpty(s.CornerId))
-            {
-                throw ConfigException.MissingField("program.segments[].corner_id（talk は必須）");
-            }
-            cornerId = s.CornerId;
+            case SegmentKind.Talk:
+                if (string.IsNullOrEmpty(s.CornerId))
+                {
+                    throw ConfigException.MissingField("program.segments[].corner_id（talk は必須）");
+                }
+                cornerId = s.CornerId;
+                break;
+
+            case SegmentKind.Song:
+                if (string.IsNullOrEmpty(s.FallbackTrackUri))
+                {
+                    throw ConfigException.MissingField("program.segments[].fallback_track_uri（song は必須）");
+                }
+                song = new SongSegmentSpec(
+                    FallbackTrackUri: SpotifyUri.NormalizeTrack(s.FallbackTrackUri),
+                    PromptHint: s.SongPromptHint ?? "",
+                    Volume: s.Volume ?? 100,
+                    PlaySeconds: s.PlaySeconds ?? 0);
+                break;
         }
-        return new ProgramSegment(kind, cornerId, s.Critical ?? false);
+        return new ProgramSegment(kind, cornerId, s.Critical ?? false, song, s.DjId);
     }
 
     private static SegmentKind ParseKind(string? raw) => raw switch
     {
         "opening" => SegmentKind.Opening,
+        "song" => SegmentKind.Song,
         "talk" => SegmentKind.Talk,
         "news" => SegmentKind.News,
         "ending" => SegmentKind.Ending,
@@ -74,5 +90,10 @@ public static class ProgramConfig
         public string? Type { get; set; }
         public string? CornerId { get; set; }
         public bool? Critical { get; set; }
+        public string? DjId { get; set; }
+        public string? SongPromptHint { get; set; }
+        public string? FallbackTrackUri { get; set; }
+        public int? Volume { get; set; }
+        public int? PlaySeconds { get; set; }
     }
 }

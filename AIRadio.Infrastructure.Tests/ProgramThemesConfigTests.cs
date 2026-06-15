@@ -75,6 +75,35 @@ public class ProgramThemesConfigTests
         Assert.Equal("E-CFG-MISSING-FIELD-001", ex.Code);
     }
 
+    [Fact]
+    public void Program_ParsesSongSegment_NormalizesUri()
+    {
+        const string yaml =
+            "program:\n  anchor_dj_id: zundamon\n  segments:\n" +
+            "    - type: song\n      song_prompt_hint: \"幕開け\"\n" +
+            "      fallback_track_uri: \"https://open.spotify.com/track/ABC?si=x\"\n" +
+            "      volume: 90\n      play_seconds: 30\n";
+
+        var f = ProgramConfig.FromYaml(yaml);
+
+        var song = f.Segments[0];
+        Assert.Equal(SegmentKind.Song, song.Kind);
+        Assert.NotNull(song.Song);
+        Assert.Equal("spotify:track:ABC", song.Song!.FallbackTrackUri); // 共有 URL → 正規化
+        Assert.Equal("幕開け", song.Song.PromptHint);
+        Assert.Equal(90, song.Song.Volume);
+        Assert.Equal(30, song.Song.PlaySeconds);
+    }
+
+    [Fact]
+    public void Program_SongMissingFallbackUri_ThrowsMissingField()
+    {
+        const string yaml = "program:\n  anchor_dj_id: z\n  segments:\n    - type: song\n";
+
+        var ex = Assert.Throws<ConfigException>(() => ProgramConfig.FromYaml(yaml));
+        Assert.Equal("E-CFG-MISSING-FIELD-001", ex.Code);
+    }
+
     // --- themes.yaml ---
 
     [Fact]

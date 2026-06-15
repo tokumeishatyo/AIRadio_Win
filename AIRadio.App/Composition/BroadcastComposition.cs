@@ -68,12 +68,15 @@ internal sealed class BroadcastComposition
             var news = new NewsRssSource(research.NewsRssUrl, http, research.NewsMaxItems);
             var weather = new JmaWeatherSource(research.WeatherAreaCode, research.WeatherAreaName, http);
             var newsProvider = new NewsWeatherProvider(news, weather, research.AnnouncementTemplate);
+            var songPicker = new SongPicker(llm, searcher, llmConfig.Temperature);
 
             var engine = new BroadcastEngine(
                 themeSequencer,
                 cornerEngine,
+                songPicker,
                 newsAnnouncement: token => newsProvider.AnnouncementAsync(token),
                 spotify,
+                clock,
                 onEvent: e => _log.Log(FormatBroadcastEvent(e)));
 
             _log.Log($"放送開始: 「{format.Title}」（{format.Segments.Count} セグメント）");
@@ -96,6 +99,8 @@ internal sealed class BroadcastComposition
         BroadcastEvent.SegmentStarted x => $"▶ セグメント{x.Index}: {x.Kind} 開始",
         BroadcastEvent.SegmentFinished x => $"■ セグメント{x.Index}: {x.Kind} 完了",
         BroadcastEvent.SegmentFailed x => $"⚠ セグメント{x.Index}: {x.Kind} 失敗 [{x.Code}] {x.Detail}",
+        BroadcastEvent.SongStarted x => $"  ♪ 冒頭曲: {Label(x.Track)}",
+        BroadcastEvent.SongFinished x => $"  ♪ 冒頭曲 終了（検知: {x.Reason}）",
         BroadcastEvent.BroadcastFinished => "番組を最後まで放送しました。",
         _ => "",
     };

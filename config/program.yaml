@@ -1,6 +1,8 @@
 # 番組フォーマット（W7, v1 = 明示 segments 列）。上から順に実行する。
 # anchor_dj_id: OP / news / ED を読む DJ（djs.yaml の id）。
 # talk は corner_id 必須（corners.yaml の id を参照）。
+# song（冒頭曲）は OP 直後の「本日の1曲目」。この曲の再生中に次のトーク台本を裏で準備し、無音区間を消す。
+# news は dj_id で専任の読み手を指定（未指定は anchor が読む）。
 # critical: true のセグメントは失敗時にスキップせず放送中止（既定 false。OP のみ true）。
 # コーナー数 N 駆動の自動生成（部品宣言 v2）は W13 で導入する。
 program:
@@ -9,7 +11,13 @@ program:
   segments:
     - type: opening
       critical: true
+    - type: song
+      song_prompt_hint: "一日の始まりや番組の幕開けに合う、前向きで広く知られた曲"
+      fallback_track_uri: "spotify:track:5jsqaNOAbeBG5QYL7JpySJ"
+      volume: 100
+      play_seconds: 0       # 0 = 曲の長さぶんフル再生（この間にトーク台本を準備）
     - type: talk
       corner_id: free_talk
     - type: news
+      dj_id: ryusei         # ニュース・天気の専任読み手（青山龍星）
     - type: ending
