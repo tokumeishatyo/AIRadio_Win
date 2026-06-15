@@ -39,4 +39,16 @@ public class ErrorsTests
     [Fact]
     public void AudioException_PlaybackFailed_HasStableCode()
         => Assert.Equal("E-RTM-AUDIO-PLAYBACK-001", AudioException.PlaybackFailed().Code);
+
+    [Fact]
+    public void SpotifyException_AuthFailed_HasStableCode()
+        => Assert.Equal("E-SPT-AUTH-FAILED-001", SpotifyException.AuthFailed("x").Code);
+
+    [Fact]
+    public void SpotifyException_AuthRequired_HasStableCode()
+        => Assert.Equal("E-SPT-AUTH-REQUIRED-001", SpotifyException.AuthRequired().Code);
+
+    [Fact]
+    public void SpotifyException_SearchFailed_HasStableCode()
+        => Assert.Equal("E-SPT-SEARCH-FAILED-001", SpotifyException.SearchFailed("x").Code);
 }

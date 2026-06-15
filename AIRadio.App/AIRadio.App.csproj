@@ -9,7 +9,7 @@
     <!-- Debug=コンソール（全ログをストリーム / Mac のコンソール起動踏襲）, Release=WinExe（コンソールなしのトレイ常駐。トレイ UI は W9）。 -->
     <OutputType Condition="'$(Configuration)' == 'Debug'">Exe</OutputType>
     <OutputType Condition="'$(Configuration)' == 'Release'">WinExe</OutputType>
-    <TargetFramework>net10.0</TargetFramework>
+    <TargetFramework>net10.0-windows</TargetFramework>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
   </PropertyGroup>

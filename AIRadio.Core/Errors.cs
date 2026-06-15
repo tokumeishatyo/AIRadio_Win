@@ -31,6 +31,18 @@ public sealed class SpotifyException : RadioException
     /// <summary>Spotify 操作の一般失敗。</summary>
     public static SpotifyException ApiFailed(string detail) =>
         new("E-SPT-API-FAILED-001", $"Spotify 操作に失敗しました: {detail}");
+
+    /// <summary>トークン交換／更新失敗。</summary>
+    public static SpotifyException AuthFailed(string detail) =>
+        new("E-SPT-AUTH-FAILED-001", $"Spotify 認証に失敗しました（client_id / redirect_uri を確認してください）: {detail}");
+
+    /// <summary>未ログイン（refresh トークンなし）。PKCE 認可が必要。</summary>
+    public static SpotifyException AuthRequired() =>
+        new("E-SPT-AUTH-REQUIRED-001", "Spotify にログインしてください（spotify-auth で認証）");
+
+    /// <summary>検索 / トラック取得失敗。</summary>
+    public static SpotifyException SearchFailed(string detail) =>
+        new("E-SPT-SEARCH-FAILED-001", $"Spotify 検索に失敗しました: {detail}");
 }
 
 /// <summary>設定（YAML ロード・検証）に関するエラー。</summary>

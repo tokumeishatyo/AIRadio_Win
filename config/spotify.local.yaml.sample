@@ -1,0 +1,16 @@
+# Spotify 設定（PKCE 認証 + Web API 再生・検索）
+# このファイルをコピーして config/spotify.local.yaml を作成してください（.gitignore 対象）。
+#   copy config\spotify.local.yaml.sample config\spotify.local.yaml
+#
+# client_id は Spotify Developer Dashboard のアプリ設定から取得。
+#   https://developer.spotify.com/dashboard → アプリ → Settings
+# ※ PKCE（公開クライアント）方式のため client_secret は不要です。
+#
+# redirect_uri は Dashboard の「Redirect URIs」に全く同じ文字列を登録してください
+# （ループバックは http://127.0.0.1:<port>/... 形式。localhost 表記は不可）。
+spotify:
+  client_id: "YOUR_CLIENT_ID"
+  redirect_uri: "http://127.0.0.1:5543/callback"
+  market: "JP"
+  # 再生先デバイス（Spotify Connect の表示名）。省略時はこの PC（type=Computer）を自動選択。
+  # device_name: "MY-PC"
