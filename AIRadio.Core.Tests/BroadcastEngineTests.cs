@@ -48,12 +48,15 @@ public class BroadcastEngineTests
             new ProgramSegment(SegmentKind.Ending),
         });
 
-    private static BroadcastThemes MakeThemes() => new(
+    private static BroadcastThemes MakeThemes(
+        string openingAnnouncement = "オープニングです。{first_song}。",
+        Greetings? greetings = null) => new(
         Opening: new ThemeConfig("OPタグ", OpTrack, IntroSeconds: 5, Volume: 100, DuckedVolume: 35, OutroSeconds: 10),
-        OpeningAnnouncement: "オープニングです。{first_song}。",
+        OpeningAnnouncement: openingAnnouncement,
         News: new ThemeConfig("ニュースです", NewsTrack, 5, 100, 35, 10),
         Ending: new ThemeConfig(null, EdTrack, 5, 100, 35, 10),
-        EndingAnnouncement: "エンディングです。");
+        EndingAnnouncement: "エンディングです。",
+        Greetings: greetings ?? new Greetings());
 
     private sealed record Harness(
         BroadcastEngine Engine, List<BroadcastEvent> Events, SpyAudioPlayer Audio, Func<int> NewsCalls);
@@ -68,7 +71,8 @@ public class BroadcastEngineTests
         IClock clock,
         SongPicker? firstSongPicker = null,
         ILLMBackend? talkLlm = null,
-        Func<CancellationToken, Task<string>>? news = null)
+        Func<CancellationToken, Task<string>>? news = null,
+        TimeZoneInfo? timeZone = null)
     {
         var events = new List<BroadcastEvent>();
         var audio = new SpyAudioPlayer();
@@ -90,7 +94,8 @@ public class BroadcastEngineTests
         var corner = new CornerEngine(talkLlm, tts, audio, talkSearcher, spotify, clock);
         var engine = new BroadcastEngine(
             themeSequencer, corner, firstSongPicker, countedNews, spotify, clock,
-            e => { lock (events) { events.Add(e); } });
+            e => { lock (events) { events.Add(e); } },
+            timeZone);
 
         return new Harness(engine, events, audio, () => { lock (newsCalls) { return newsCalls[0]; } });
     }
@@ -127,6 +132,57 @@ public class BroadcastEngineTests
         // OP の {first_song} が冒頭曲の「<artist>で、「<title>」」に展開され、anchor(ずんだもん=3) が読む。
         var spoken = h.Audio.Played.Select(w => Encoding.UTF8.GetString(w)).ToList();
         Assert.Contains(spoken, s => s.StartsWith("3:") && s.Contains("本日のアーティストで、「本日の曲」"));
+    }
+
+    [Fact]
+    public async Task Opening_ExpandsTimePlaceholders_AtSpeechTime()
+    {
+        // 発話直前展開（w8 §3）: 固定時刻 2026-06-12 15:07 UTC を timeZone=UTC で解釈 →
+        // {greeting}=こんにちは（昼）/ {month}=6 / {day}=12 / {ampm}=午後 / {hour}=3。
+        var spotify = new FakeSpotifyController();
+        var clock = new FakeClock(new DateTimeOffset(2026, 6, 12, 15, 7, 0, TimeSpan.Zero));
+        var h = BuildEngine(spotify, clock, timeZone: TimeZoneInfo.Utc);
+        var themes = MakeThemes(openingAnnouncement: "{greeting}。{month}月{day}日、{ampm}{hour}時。{first_song}。");
+
+        await h.Engine.RunAsync(MakeFormat(), themes, Corners, Djs);
+
+        // anchor(ずんだもん=3) が、実時刻 + 冒頭曲の曲振りで読む（ゼロ埋めなし）。
+        var spoken = h.Audio.Played.Select(w => Encoding.UTF8.GetString(w)).ToList();
+        Assert.Contains(spoken, s =>
+            s.StartsWith("3:") && s.Contains("こんにちは。6月12日、午後3時。本日のアーティストで、「本日の曲」。"));
+    }
+
+    [Fact]
+    public async Task News_ExpandsTimePlaceholders_TwoStage_ReadByAnchor()
+    {
+        // 二段展開: Provider 原稿に残った {hour12}/{minute} を、エンジンが発話直前に実時刻で展開する。
+        // 0:05 UTC → {hour12}=0 / {minute}=5（午前午後なし・ゼロ埋めなし）。
+        var spotify = new FakeSpotifyController();
+        var clock = new FakeClock(new DateTimeOffset(2026, 1, 9, 0, 5, 0, TimeSpan.Zero));
+        var h = BuildEngine(
+            spotify, clock, timeZone: TimeZoneInfo.Utc,
+            news: _ => Task.FromResult("時刻は{hour12}時{minute}分になりました。ニュース速報。"));
+
+        await h.Engine.RunAsync(MakeFormat(), MakeThemes(), Corners, Djs);
+
+        var spoken = h.Audio.Played.Select(w => Encoding.UTF8.GetString(w)).ToList();
+        Assert.Contains(spoken, s => s.Contains("時刻は0時5分になりました。ニュース速報。"));
+    }
+
+    [Fact]
+    public async Task Ending_NoTimePlaceholders_PassesThroughVerbatim()
+    {
+        // ED は時刻プレースホルダ非含有 → 同じ時刻辞書をマージしても無置換（w8 §2 ED は out。リグレッション固定）。
+        var spotify = new FakeSpotifyController();
+        var clock = new FakeClock(new DateTimeOffset(2026, 6, 12, 15, 7, 0, TimeSpan.Zero));
+        var h = BuildEngine(spotify, clock, timeZone: TimeZoneInfo.Utc);
+
+        await h.Engine.RunAsync(MakeFormat(), MakeThemes(), Corners, Djs);
+
+        // anchor(ずんだもん=3) が ED 原文をそのまま読み、時刻文字列（午前/午後）が一切混入しない。
+        var spoken = h.Audio.Played.Select(w => Encoding.UTF8.GetString(w)).ToList();
+        Assert.Contains(spoken, s => s.StartsWith("3:") && s.Contains("エンディングです"));
+        Assert.DoesNotContain(spoken, s => s.Contains("午前") || s.Contains("午後"));
     }
 
     [Fact]

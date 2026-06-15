@@ -50,6 +50,7 @@ public sealed class BroadcastEngine
     private readonly Func<CancellationToken, Task<string>> _newsAnnouncement;
     private readonly ISpotifyController _spotify;
     private readonly IClock _clock;
+    private readonly TimeZoneInfo _timeZone;
     private readonly Action<BroadcastEvent>? _onEvent;
 
     /// <param name="songPicker">冒頭曲の選曲（null・失敗時は <see cref="SongSegmentSpec.FallbackTrackUri"/> に倒す）。</param>
@@ -57,6 +58,7 @@ public sealed class BroadcastEngine
     /// ニュース原稿を返すデリゲート。Core は Infrastructure（<c>NewsWeatherProvider</c>）を参照できないため
     /// （§3-4）、App が <c>ct =&gt; provider.AnnouncementAsync(ct)</c> を渡す。news 出現のたびに呼ぶ。
     /// </param>
+    /// <param name="timeZone">時刻プレースホルダの解釈に使うタイムゾーン（W8。省略時は <see cref="TimeZoneInfo.Local"/>）。</param>
     public BroadcastEngine(
         ThemeSequencer themeSequencer,
         CornerEngine cornerRunner,
@@ -64,7 +66,8 @@ public sealed class BroadcastEngine
         Func<CancellationToken, Task<string>> newsAnnouncement,
         ISpotifyController spotify,
         IClock clock,
-        Action<BroadcastEvent>? onEvent = null)
+        Action<BroadcastEvent>? onEvent = null,
+        TimeZoneInfo? timeZone = null)
     {
         _themeSequencer = themeSequencer;
         _cornerRunner = cornerRunner;
@@ -73,6 +76,7 @@ public sealed class BroadcastEngine
         _spotify = spotify;
         _clock = clock;
         _onEvent = onEvent;
+        _timeZone = timeZone ?? TimeZoneInfo.Local;
     }
 
     /// <summary>番組を 1 本通しで実行する（単一のキャンセル可能 Task として呼ばれる前提）。</summary>
@@ -287,7 +291,7 @@ public sealed class BroadcastEngine
         {
             case SegmentKind.Opening:
                 await _themeSequencer
-                    .RunAsync(themes.Opening, Expand(themes.OpeningAnnouncement, extraValues), anchor.SpeakerId, ct)
+                    .RunAsync(themes.Opening, Expand(themes.Greetings, themes.OpeningAnnouncement, extraValues), anchor.SpeakerId, ct)
                     .ConfigureAwait(false);
                 break;
 
@@ -327,21 +331,33 @@ public sealed class BroadcastEngine
                 // 専任のニュース読み手（program の dj_id。未指定は anchor）。preflight 検証済み。
                 var newsSpeaker = segment.DjId is string newsDjId ? djs.First(d => d.Id == newsDjId) : anchor;
                 await _themeSequencer
-                    .RunAsync(themes.News, Expand(script, extraValues), newsSpeaker.SpeakerId, ct)
+                    .RunAsync(themes.News, Expand(themes.Greetings, script, extraValues), newsSpeaker.SpeakerId, ct)
                     .ConfigureAwait(false);
                 break;
 
             case SegmentKind.Ending:
                 await _themeSequencer
-                    .RunAsync(themes.Ending, Expand(themes.EndingAnnouncement, extraValues), anchor.SpeakerId, ct)
+                    .RunAsync(themes.Ending, Expand(themes.Greetings, themes.EndingAnnouncement, extraValues), anchor.SpeakerId, ct)
                     .ConfigureAwait(false);
                 break;
         }
     }
 
-    /// <summary>{first_song} 等の番組コンテキストを展開（未知キーは原文保持。時刻系展開は W8）。</summary>
-    private static string Expand(string template, IReadOnlyDictionary<string, string> values)
-        => TemplateExpander.Expand(template, values);
+    /// <summary>
+    /// 時刻プレースホルダ（<c>{greeting}</c>/<c>{month}</c>/<c>{day}</c>/<c>{ampm}</c>/<c>{hour}</c>/<c>{hour12}</c>/<c>{minute}</c>）と
+    /// 番組コンテキスト（<c>{first_song}</c> 等）を展開する（未知キーは原文保持）。**各セグメントの発話直前に**
+    /// <see cref="IClock.Now"/> を読むため、ローリング先読み準備で数分先行しても時報が再生時点で正確（w8 §3）。
+    /// ニュースは Provider が <c>{news}</c>/<c>{weather}</c> を準備時に展開済みの原稿を渡し、ここで時刻を被せる二段展開。
+    /// </summary>
+    private string Expand(Greetings greetings, string template, IReadOnlyDictionary<string, string> extra)
+    {
+        var values = new Dictionary<string, string>(TimePhrases.Values(_clock.Now, greetings, _timeZone));
+        foreach (var (key, value) in extra)
+        {
+            values[key] = value; // {first_song} 等が衝突時に優先（Mac の merge { _, new in new } と同義）。
+        }
+        return TemplateExpander.Expand(template, values);
+    }
 
     /// <summary>
     /// ローリング準備の台帳。準備 Task（選曲 / 台本 / ニュース原稿）の保持・消費・破棄をスレッドセーフに行う

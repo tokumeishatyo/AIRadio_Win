@@ -3,8 +3,18 @@
 # 演出: (tagline) → BGM フル音量 intro_seconds → ducked_volume へ → 発話 →
 #       曲の「残り outro_seconds 秒」へシーク → フル音量へ戻す → 曲の終わりで停止。
 # W7 は anchor（program.yaml の anchor_dj_id = ずんだもん）が OP/news/ED を読む単一・フラット形。
-# 曜日替わりメイン DJ の by_dj は W13.5、{greeting}/時刻プレースホルダは W8/W13.5 で導入。
+# 曜日替わりメイン DJ の by_dj は W13.5。{greeting}/時刻プレースホルダは W8 で導入済み。
 # {first_song} は OP 末尾の冒頭曲の曲振り（発話直前に展開、曲名不明時は「本日の一曲」）。
+
+# 時間帯ごとの挨拶（{greeting} の値。境界はコード側: 朝5-11時/昼12-16時/夜17-4時）。
+greetings:
+  morning: "おはようございます"
+  afternoon: "こんにちは"
+  evening: "こんばんは"
+
+# announcement では時刻プレースホルダが使える（発話直前に展開、仕様 w8 §3）:
+#   {greeting} 時間帯挨拶 / {month}月 {day}日 / {ampm}{hour}時 = 午前/午後+NHK式12時間 /
+#   {hour12}時{minute}分 = 午前午後なしの12時間表記
 opening:
   track_uri: "spotify:track:5jsqaNOAbeBG5QYL7JpySJ"
   intro_seconds: 5
@@ -12,7 +22,7 @@ opening:
   ducked_volume: 35
   outro_seconds: 10
   tagline: "ずんだもんの ケイラボAIラジオ"
-  announcement: "こんにちは。ケイラボAIラジオの時間なのだ。お送りするのはずんだもんなのだ。本日もリスナーの皆さんと、ゆったりした時間を過ごしていきたいと思うのだ。なお、本番組の音声合成にはVOICEVOXを使用しているのだ。それでは早速、1曲目を聴いてもらうのだ。{first_song}。"
+  announcement: "{greeting}。{month}月{day}日、{ampm}{hour}時になりました。ケイラボAIラジオの時間なのだ。お送りするのはずんだもんなのだ。本日もリスナーの皆さんと、ゆったりした時間を過ごしていきたいと思うのだ。なお、本番組の音声合成にはVOICEVOXを使用しているのだ。それでは早速、1曲目を聴いてもらうのだ。{first_song}。"
 
 # news は staging（+tagline）のみ。announcement は実行時に取得したニュース・天気原稿で差し替える。
 news:

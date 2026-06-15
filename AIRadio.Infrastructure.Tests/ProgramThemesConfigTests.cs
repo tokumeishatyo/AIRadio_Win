@@ -164,4 +164,61 @@ public class ProgramThemesConfigTests
 
         Assert.Throws<ConfigException>(() => ThemesConfig.FromYaml(yaml));
     }
+
+    // --- themes.yaml greetings（W8） ---
+
+    private const string MinimalThemes =
+        "opening:\n  track_uri: \"spotify:track:O\"\n  announcement: \"OP\"\n" +
+        "news:\n  track_uri: \"spotify:track:N\"\n" +
+        "ending:\n  track_uri: \"spotify:track:E\"\n  announcement: \"ED\"\n";
+
+    [Fact]
+    public void Themes_LoadsGreetings_WhenPresent()
+    {
+        const string yaml = MinimalThemes +
+            "greetings:\n  morning: \"おはよ\"\n  afternoon: \"ちは\"\n  evening: \"ばんは\"\n";
+
+        var t = ThemesConfig.FromYaml(yaml);
+
+        Assert.Equal("おはよ", t.Greetings.Morning);
+        Assert.Equal("ちは", t.Greetings.Afternoon);
+        Assert.Equal("ばんは", t.Greetings.Evening);
+    }
+
+    [Fact]
+    public void Themes_GreetingsDefault_WhenBlockOmitted()
+    {
+        // greetings ブロックごと欠落 → 既定の挨拶（fail-tolerant、空挨拶を読まない）。
+        var t = ThemesConfig.FromYaml(MinimalThemes);
+
+        Assert.Equal("おはようございます", t.Greetings.Morning);
+        Assert.Equal("こんにちは", t.Greetings.Afternoon);
+        Assert.Equal("こんばんは", t.Greetings.Evening);
+    }
+
+    [Fact]
+    public void Themes_GreetingsPartial_FillsMissingWithDefault()
+    {
+        // afternoon のみ指定 → 残り 2 つ（キー欠落）は既定を維持。
+        const string yaml = MinimalThemes + "greetings:\n  afternoon: \"やあ\"\n";
+
+        var t = ThemesConfig.FromYaml(yaml);
+
+        Assert.Equal("おはようございます", t.Greetings.Morning); // 欠落 → 既定
+        Assert.Equal("やあ", t.Greetings.Afternoon);            // 上書き
+        Assert.Equal("こんばんは", t.Greetings.Evening);        // 欠落 → 既定
+    }
+
+    [Fact]
+    public void Themes_GreetingsEmptyString_KeptAsIs_OmittedKeyDefaults()
+    {
+        // Mac 一致: 明示的な空文字はそのまま採用（既定に倒さない）。倒すのはキー欠落（null）のみ。
+        const string yaml = MinimalThemes + "greetings:\n  morning: \"\"\n  afternoon: \"やあ\"\n"; // evening はキー欠落
+
+        var t = ThemesConfig.FromYaml(yaml);
+
+        Assert.Equal("", t.Greetings.Morning);            // 明示的空文字はそのまま（Mac 一致）
+        Assert.Equal("やあ", t.Greetings.Afternoon);       // 上書き
+        Assert.Equal("こんばんは", t.Greetings.Evening);   // 欠落（null）→ 既定
+    }
 }

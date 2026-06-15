@@ -69,13 +69,18 @@ public sealed record ProgramFormat(
 /// <see cref="News"/> は staging（+tagline）のみを持つ。
 /// </summary>
 /// <param name="Opening">OP の BGM 演出（tagline 込み）。</param>
-/// <param name="OpeningAnnouncement">OP の固定口上（<c>{first_song}</c> を含むと冒頭曲の曲振りが入る）。</param>
+/// <param name="OpeningAnnouncement">
+/// OP の固定口上（<c>{first_song}</c> を含むと冒頭曲の曲振り、時刻プレースホルダ（<c>{greeting}</c> 等, W8）を含むと
+/// 発話直前に実時刻が入る）。
+/// </param>
 /// <param name="News">news の BGM 演出（tagline 込み。announcement は実行時注入）。</param>
 /// <param name="Ending">ED の BGM 演出（tagline なし = いきなり BGM）。</param>
 /// <param name="EndingAnnouncement">ED の固定口上。</param>
+/// <param name="Greetings">時間帯挨拶（<c>{greeting}</c> の値。OP/news/ED の発話直前展開で共有, W8）。</param>
 public sealed record BroadcastThemes(
     ThemeConfig Opening,
     string OpeningAnnouncement,
     ThemeConfig News,
     ThemeConfig Ending,
-    string EndingAnnouncement);
+    string EndingAnnouncement,
+    Greetings Greetings);
