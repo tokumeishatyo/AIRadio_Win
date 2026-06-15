@@ -179,3 +179,170 @@ public sealed class CollectingRadioLog : IRadioLog
         lock (_lock) { _messages.Add(message); }
     }
 }
+
+/// <summary>
+/// 仮想時間で再生位置が進む Spotify + Clock のシミュレータ（フル再生の終端検知テスト用）。
+/// <see cref="DelayAsync"/> が仮想時間を進め、<see cref="PlayerStateAsync"/> は再生開始からの経過 = 再生位置を返す。
+/// <see cref="ISpotifyController"/> と <see cref="IClock"/> の両方に同じインスタンスを渡して使う。
+/// </summary>
+public sealed class PlaybackSimulator : ISpotifyController, IClock
+{
+    private readonly object _lock = new();
+    private readonly IReadOnlyDictionary<string, double> _durations;
+    // false = スナップショットに曲長を含めない実装（AppleScript 等の互換パス）を再現。
+    private readonly bool _snapshotIncludesDuration;
+    // currentTrackDurationSeconds()（別問い合わせ）が返す値の上書き。stale な曲長の注入用。
+    private readonly double? _legacyDurationOverride;
+    // playerState() が最初に返す stale スナップショット列（切替直後の前曲応答などの再現）。
+    private readonly Queue<PlayerState> _staleSnapshots;
+    // playerState() の n 回目（1 始まり）の応答を stale に差し替える（再生途中の stale 混入の再現）。
+    private readonly IReadOnlyDictionary<int, PlayerState> _staleByCall;
+    private int _stateCalls;
+    private double _virtualTime;
+    private string? _currentUri;
+    private double _startedAt;
+    private bool _paused = true;
+    private readonly List<double> _sleeps = new();
+    private readonly List<SpotifyEvent> _events = new();
+
+    public PlaybackSimulator(
+        IReadOnlyDictionary<string, double> durations,
+        bool snapshotIncludesDuration = true,
+        double? legacyDurationOverride = null,
+        IEnumerable<PlayerState>? staleSnapshots = null,
+        IReadOnlyDictionary<int, PlayerState>? staleByCall = null)
+    {
+        _durations = durations;
+        _snapshotIncludesDuration = snapshotIncludesDuration;
+        _legacyDurationOverride = legacyDurationOverride;
+        _staleSnapshots = new Queue<PlayerState>(staleSnapshots ?? Enumerable.Empty<PlayerState>());
+        _staleByCall = staleByCall ?? new Dictionary<int, PlayerState>();
+    }
+
+    public IReadOnlyList<double> Sleeps
+    {
+        get { lock (_lock) { return _sleeps.ToList(); } }
+    }
+
+    public IReadOnlyList<SpotifyEvent> Events
+    {
+        get { lock (_lock) { return _events.ToList(); } }
+    }
+
+    /// <summary>現在の仮想再生位置（テストの検証用）。</summary>
+    public double CurrentPositionSeconds
+    {
+        get { lock (_lock) { return PositionLocked(); } }
+    }
+
+    // MARK: IClock
+
+    public DateTimeOffset Now
+    {
+        get { lock (_lock) { return DateTimeOffset.UnixEpoch.AddSeconds(_virtualTime); } }
+    }
+
+    public Task DelayAsync(double seconds, CancellationToken ct = default)
+    {
+        lock (_lock)
+        {
+            _sleeps.Add(seconds);
+            _virtualTime += Math.Max(seconds, 0);
+        }
+        return Task.CompletedTask;
+    }
+
+    // MARK: ISpotifyController
+
+    public Task PlayAsync(string uri, CancellationToken ct = default)
+    {
+        lock (_lock)
+        {
+            _events.Add(new SpotifyEvent.Play(uri));
+            _currentUri = uri;
+            _startedAt = _virtualTime;
+            _paused = false;
+        }
+        return Task.CompletedTask;
+    }
+
+    public Task PauseAsync(CancellationToken ct = default)
+    {
+        lock (_lock) { _events.Add(new SpotifyEvent.Pause()); _paused = true; }
+        return Task.CompletedTask;
+    }
+
+    public Task SetVolumeAsync(int percent, CancellationToken ct = default)
+    {
+        lock (_lock) { _events.Add(new SpotifyEvent.SetVolume(percent)); }
+        return Task.CompletedTask;
+    }
+
+    public Task SeekAsync(int seconds, CancellationToken ct = default)
+    {
+        lock (_lock)
+        {
+            _events.Add(new SpotifyEvent.Seek(seconds));
+            _startedAt = _virtualTime - seconds;
+        }
+        return Task.CompletedTask;
+    }
+
+    public Task<PlayerState> PlayerStateAsync(CancellationToken ct = default)
+    {
+        lock (_lock)
+        {
+            _stateCalls++;
+            if (_staleByCall.TryGetValue(_stateCalls, out var stale))
+            {
+                return Task.FromResult(stale);
+            }
+            if (_staleSnapshots.Count > 0)
+            {
+                return Task.FromResult(_staleSnapshots.Dequeue());
+            }
+            if (_currentUri is not string uri || _paused)
+            {
+                return Task.FromResult(new PlayerState(
+                    _currentUri is null ? PlaybackState.Stopped : PlaybackState.Paused, _currentUri));
+            }
+            var duration = _durations.TryGetValue(uri, out var d) ? d : 0;
+            var position = PositionLocked();
+            // 曲の終端に達したら自然停止（paused）として観測される。
+            if (duration > 0 && position >= duration)
+            {
+                return Task.FromResult(new PlayerState(
+                    PlaybackState.Paused, uri, duration, _snapshotIncludesDuration ? duration : 0));
+            }
+            return Task.FromResult(new PlayerState(
+                PlaybackState.Playing, uri, position, _snapshotIncludesDuration ? duration : 0));
+        }
+    }
+
+    public Task<double> CurrentTrackDurationSecondsAsync(CancellationToken ct = default)
+    {
+        lock (_lock)
+        {
+            if (_legacyDurationOverride is double over)
+            {
+                return Task.FromResult(over);
+            }
+            if (_currentUri is not string uri)
+            {
+                return Task.FromResult(0.0);
+            }
+            return Task.FromResult(_durations.TryGetValue(uri, out var d) ? d : 0);
+        }
+    }
+
+    private double PositionLocked()
+    {
+        if (_currentUri is not string uri)
+        {
+            return 0;
+        }
+        var elapsed = _virtualTime - _startedAt;
+        var duration = _durations.TryGetValue(uri, out var d) ? d : 0;
+        return duration > 0 ? Math.Min(elapsed, duration) : elapsed;
+    }
+}

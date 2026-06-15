@@ -5,6 +5,7 @@ using AIRadio.Infrastructure;
 //   (引数なし) / tts   : VOICEVOX で 1 行合成 → NAudio 再生（W1）
 //   spotify-auth        : ブラウザで Spotify PKCE ログイン → refresh を DPAPI 保管（W2）
 //   spotify             : 検索 → プレフライト（isPlayable）表示（W2）
+//   spotify-play        : 検索 → 先頭曲を再生 → 数秒後に停止（W3。要 Premium + アクティブデバイス）
 // Debug ビルドはコンソールに全ログがストリームする（Mac 版のコンソール起動を踏襲）。
 
 IRadioLog log = new ConsoleRadioLog();
@@ -19,8 +20,10 @@ switch (mode)
         return await RunSpotifyAuthAsync();
     case "spotify":
         return await RunSpotifySearchAsync();
+    case "spotify-play":
+        return await RunSpotifyPlayAsync();
     default:
-        log.Log($"不明なモード: {mode}（tts / spotify-auth / spotify）");
+        log.Log($"不明なモード: {mode}（tts / spotify-auth / spotify / spotify-play）");
         return 2;
 }
 
@@ -106,6 +109,49 @@ async Task<int> RunSpotifySearchAsync()
             log.Log($"  {(playable ? "✓" : "✗")} {track.Title} / {track.Artist}  {track.Uri}");
         }
         log.Log("検索・プレフライトデモ完了。W2 OK。");
+        return 0;
+    }
+    catch (RadioException ex)
+    {
+        log.Log($"エラー [{ex.Code}]: {ex.Message}");
+        return 1;
+    }
+}
+
+async Task<int> RunSpotifyPlayAsync()
+{
+    var cfg = TryLoadSpotify();
+    if (cfg is null)
+    {
+        return 1;
+    }
+    var auth = MakeAuth(cfg);
+    IHttpClient http = new HttpClientAdapter();
+    var searcher = new SpotifyWebSearcher(auth, http, cfg.Market);
+    var spotify = new WebApiSpotifyController(auth, http, preferredDeviceName: cfg.DeviceName);
+
+    const string query = "YOASOBI";
+    const int playSeconds = 8;
+    try
+    {
+        log.Log($"検索: {query}（market={cfg.Market}）");
+        var results = await searcher.SearchAsync(query, 5);
+        var track = results.FirstOrDefault(t => t.IsPlayable) ?? results.FirstOrDefault();
+        if (track is null)
+        {
+            log.Log("再生可能な曲が見つかりませんでした。");
+            return 1;
+        }
+
+        log.Log($"再生: {track.Title} / {track.Artist}  {track.Uri}");
+        await spotify.PlayAsync(track.Uri);
+        var state = await spotify.PlayerStateAsync();
+        log.Log($"プレイヤー状態: {state.State} pos={state.PositionSeconds:0.0}s / dur={state.DurationSeconds:0.0}s");
+
+        log.Log($"{playSeconds} 秒再生して停止します…");
+        await Task.Delay(TimeSpan.FromSeconds(playSeconds));
+        await spotify.PauseAsync();
+        log.Log("停止しました。W3 再生デモ完了。");
         return 0;
     }
     catch (RadioException ex)
