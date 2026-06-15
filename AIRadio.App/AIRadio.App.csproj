@@ -1,18 +1,31 @@
-﻿<Project Sdk="Microsoft.NET.Sdk">
+<Project Sdk="Microsoft.NET.Sdk">
 
   <ItemGroup>
     <ProjectReference Include="..\AIRadio.Core\AIRadio.Core.csproj" />
     <ProjectReference Include="..\AIRadio.Infrastructure\AIRadio.Infrastructure.csproj" />
   </ItemGroup>
 
+  <ItemGroup>
+    <PackageReference Include="Avalonia" Version="12.0.3" />
+    <PackageReference Include="Avalonia.Desktop" Version="12.0.3" />
+    <PackageReference Include="Avalonia.Themes.Fluent" Version="12.0.3" />
+  </ItemGroup>
+
   <PropertyGroup>
-    <!-- Debug=コンソール（全ログをストリーム / Mac のコンソール起動踏襲）, Release=WinExe（コンソールなしのトレイ常駐。トレイ UI は W9）。 -->
+    <!-- Debug=コンソール（全ログをストリーム / Mac のコンソール起動踏襲）, Release=WinExe（コンソールなしのトレイ常駐）。 -->
     <OutputType Condition="'$(Configuration)' == 'Debug'">Exe</OutputType>
     <OutputType Condition="'$(Configuration)' == 'Release'">WinExe</OutputType>
     <TargetFramework>net10.0-windows</TargetFramework>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
+    <AvaloniaUseCompiledBindingsByDefault>true</AvaloniaUseCompiledBindingsByDefault>
+    <BuiltInComInteropSupport>true</BuiltInComInteropSupport>
   </PropertyGroup>
+
+  <ItemGroup>
+    <!-- トレイアイコン等の Avalonia リソース。 -->
+    <AvaloniaResource Include="Assets\**" />
+  </ItemGroup>
 
   <ItemGroup>
     <!-- 実行ファイル隣（出力ディレクトリ）に config/ を配置し、tts.yaml 等を実行時に読む（Mac 同一レイアウト）。 -->

@@ -56,57 +56,74 @@ public sealed class ThemeSequencer
         await _spotify.PlayAsync(theme.TrackUri, ct).ConfigureAwait(false);
         await _spotify.SetVolumeAsync(theme.Volume, ct).ConfigureAwait(false);
 
-        byte[]? pending = null;
-        if (chunks.Count > 0)
+        // 先行合成（hot task）の未 await ハンドル。早期離脱（キャンセル/失敗）時に finally で観測し、
+        // Swift の async let（暗黙キャンセル + await）相当の確定的な後始末にする（孤立した未観測タスクを残さない）。
+        Task<byte[]>? inFlight = null;
+        try
         {
-            var firstWav = _tts.SynthesizeAsync(chunks[0], speakerId, ct); // 先行合成（イントロ中に裏で走らせる）
-            await _clock.DelayAsync(theme.IntroSeconds, ct).ConfigureAwait(false);
-            await _spotify.SetVolumeAsync(theme.DuckedVolume, ct).ConfigureAwait(false);
-            pending = await firstWav.ConfigureAwait(false);
-        }
-        else
-        {
-            await _clock.DelayAsync(theme.IntroSeconds, ct).ConfigureAwait(false);
-            await _spotify.SetVolumeAsync(theme.DuckedVolume, ct).ConfigureAwait(false);
-        }
-
-        // 発話: 次のチャンクは現在チャンクの再生中に先行合成する（無音排除）。
-        var index = 0;
-        while (pending is not null)
-        {
-            var nextIndex = index + 1;
-            if (nextIndex < chunks.Count)
+            byte[]? pending = null;
+            if (chunks.Count > 0)
             {
-                var prefetch = _tts.SynthesizeAsync(chunks[nextIndex], speakerId, ct);
-                await _audio.PlayAsync(pending, ct).ConfigureAwait(false);
-                pending = await prefetch.ConfigureAwait(false);
+                inFlight = _tts.SynthesizeAsync(chunks[0], speakerId, ct); // 先行合成（イントロ中に裏で走らせる）
+                await _clock.DelayAsync(theme.IntroSeconds, ct).ConfigureAwait(false);
+                await _spotify.SetVolumeAsync(theme.DuckedVolume, ct).ConfigureAwait(false);
+                pending = await inFlight.ConfigureAwait(false);
+                inFlight = null;
             }
             else
             {
-                await _audio.PlayAsync(pending, ct).ConfigureAwait(false);
-                pending = null;
+                await _clock.DelayAsync(theme.IntroSeconds, ct).ConfigureAwait(false);
+                await _spotify.SetVolumeAsync(theme.DuckedVolume, ct).ConfigureAwait(false);
             }
-            index = nextIndex;
-        }
 
-        // アウトロ: 曲の「残り OutroSeconds 秒」へシーク → アンダック → 曲の終わりまで余韻。
-        double duration;
-        try
-        {
-            duration = await _spotify.CurrentTrackDurationSecondsAsync(ct).ConfigureAwait(false);
+            // 発話: 次のチャンクは現在チャンクの再生中に先行合成する（無音排除）。
+            var index = 0;
+            while (pending is not null)
+            {
+                var nextIndex = index + 1;
+                if (nextIndex < chunks.Count)
+                {
+                    inFlight = _tts.SynthesizeAsync(chunks[nextIndex], speakerId, ct);
+                    await _audio.PlayAsync(pending, ct).ConfigureAwait(false);
+                    pending = await inFlight.ConfigureAwait(false);
+                    inFlight = null;
+                }
+                else
+                {
+                    await _audio.PlayAsync(pending, ct).ConfigureAwait(false);
+                    pending = null;
+                }
+                index = nextIndex;
+            }
+
+            // アウトロ: 曲の「残り OutroSeconds 秒」へシーク → アンダック → 曲の終わりまで余韻。
+            double duration;
+            try
+            {
+                duration = await _spotify.CurrentTrackDurationSecondsAsync(ct).ConfigureAwait(false);
+            }
+            catch
+            {
+                duration = 0; // Mac の `try?` 相当。曲長が取れなければシークしない。
+            }
+            if (duration > theme.OutroSeconds)
+            {
+                // 四捨五入（Swift の Double.rounded() = 中点は 0 から遠い側へ）。C# 既定の銀行家丸めとは異なるため明示。
+                var rounded = (int)Math.Round(duration, MidpointRounding.AwayFromZero);
+                await _spotify.SeekAsync(rounded - theme.OutroSeconds, ct).ConfigureAwait(false);
+            }
+            await _spotify.SetVolumeAsync(theme.Volume, ct).ConfigureAwait(false); // アンダック（フル音量）
+            await _clock.DelayAsync(theme.OutroSeconds, ct).ConfigureAwait(false);
         }
-        catch
+        finally
         {
-            duration = 0; // Mac の `try?` 相当。曲長が取れなければシークしない。
+            // 未観測の先行合成があれば待って観測する（例外は破棄。ct シグナル済みなら即座に戻る）。
+            if (inFlight is not null)
+            {
+                try { await inFlight.ConfigureAwait(false); }
+                catch { /* 破棄された合成。ここでは観測のみ */ }
+            }
         }
-        if (duration > theme.OutroSeconds)
-        {
-            // 四捨五入（Swift の Double.rounded() = 中点は 0 から遠い側へ）。C# 既定の銀行家丸めとは異なるため明示。
-            var rounded = (int)Math.Round(duration, MidpointRounding.AwayFromZero);
-            await _spotify.SeekAsync(rounded - theme.OutroSeconds, ct).ConfigureAwait(false);
-        }
-        await _spotify.SetVolumeAsync(theme.Volume, ct).ConfigureAwait(false); // アンダック（フル音量）
-        await _clock.DelayAsync(theme.OutroSeconds, ct).ConfigureAwait(false);
     }
 
     /// <summary>
