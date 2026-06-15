@@ -1,3 +1,4 @@
+using AIRadio.App.Composition;
 using AIRadio.Core;
 using AIRadio.Infrastructure;
 
@@ -11,6 +12,7 @@ namespace AIRadio.App;
 //   theme        : BGM ダッキング演出（tagline→BGM→duck→発話→outro→停止）（W4。要 VOICEVOX + Premium）
 //   news         : ニュース見出し + 天気を取得して定型原稿を生成・表示（W5。fail-tolerant、音声なし）
 //   corner       : Gemini 台本 → 2-DJ 会話 → 締めに一曲（W6。要 Gemini キー + VOICEVOX + Premium）
+//   broadcast    : 番組 1 本（OP → トーク → ニュース → ED）を通し再生（W7。Ctrl-C で完全静寂）
 internal static class DemoRunner
 {
     private static readonly IRadioLog Log = new ConsoleRadioLog();
@@ -28,14 +30,35 @@ internal static class DemoRunner
             "theme" => await RunThemeDemoAsync(),
             "news" => await RunNewsDemoAsync(),
             "corner" => await RunCornerDemoAsync(),
+            "broadcast" => await RunBroadcastDemoAsync(),
             _ => Unknown(mode),
         };
     }
 
     private static int Unknown(string mode)
     {
-        Log.Log($"不明なモード: {mode}（tts / spotify-auth / spotify / spotify-play / theme / news / corner）");
+        Log.Log($"不明なモード: {mode}（tts / spotify-auth / spotify / spotify-play / theme / news / corner / broadcast）");
         return 2;
+    }
+
+    private static async Task<int> RunBroadcastDemoAsync()
+    {
+        Log.Log("ケイラボAIラジオ (Windows) — W7 番組進行デモ（OP → トーク → ニュース → ED）");
+        Log.Log("（停止するには Ctrl-C。完全静寂になることを確認できます）");
+
+        using var cts = new CancellationTokenSource();
+        Console.CancelKeyPress += (_, e) =>
+        {
+            e.Cancel = true; // プロセスを即殺さず CTS 経由で graceful に止める（後始末 pause を送り切る）。
+            cts.Cancel();
+        };
+
+        // BroadcastComposition が config 新規ロード → エンジン組み立て → 1 本実行。
+        // 設定不正・critical 中止・キャンセルはすべて内部でログ + 静寂化する（例外は外へ出さない）。
+        var composition = new BroadcastComposition(ConfigDir, Log);
+        await composition.RunAsync(cts.Token);
+        Log.Log("W7 番組進行デモ終了。");
+        return 0;
     }
 
     private static async Task<int> RunTtsDemoAsync()

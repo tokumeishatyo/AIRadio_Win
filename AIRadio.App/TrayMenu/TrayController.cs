@@ -18,7 +18,7 @@ internal sealed class TrayController
     private readonly IClassicDesktopStyleApplicationLifetime _desktop;
     private readonly IRadioLog _log = new ConsoleRadioLog();
     private readonly BroadcastSession _session;
-    private readonly MinimalBroadcast _broadcast;
+    private readonly BroadcastComposition _broadcast;
 
     private readonly TrayIcon _trayIcon;
     private readonly NativeMenuItem _stateItem = new("停止中") { IsEnabled = false };
@@ -28,7 +28,7 @@ internal sealed class TrayController
     {
         _desktop = desktop;
         var configDir = Path.Combine(AppContext.BaseDirectory, "config");
-        _broadcast = new MinimalBroadcast(configDir, _log);
+        _broadcast = new BroadcastComposition(configDir, _log);
         _session = new BroadcastSession(OnStateChanged);
 
         _toggleItem.Click += (_, _) => Toggle();

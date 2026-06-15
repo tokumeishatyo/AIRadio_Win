@@ -9,8 +9,9 @@ weather:
   # https://www.jma.go.jp/bosai/forecast/data/forecast/{area_code}.json
   area_code: "130000"
   area_name: "東京地方"   # JSON 内の対象エリア名（areas[].area.name と一致させる）
-# {news} と {weather} に取得結果が入る。{hour12}/{minute} は発話直前の時刻（W8 で展開）。
-announcement_template: "時刻は{hour12}時{minute}分になりました。ニュースの時間です。{news} 続いて、天気予報です。{weather} 以上、ニュースと天気予報でした。"
+# {news} と {weather} に取得結果が入る。冒頭の時刻読み上げ（{hour12}時{minute}分）は
+# 時刻プレースホルダ展開とともに W8 で追加する（W7 では未展開の読み上げを避けるため省く）。
+announcement_template: "ニュースの時間です。{news} 続いて、天気予報です。{weather} 以上、ニュースと天気予報でした。"
 
 # LLM によるアナウンサー原稿生成は W11 で実装（本スライスでは読み飛ばす）。
 # llm_script:

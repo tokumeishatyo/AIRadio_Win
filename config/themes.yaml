@@ -1,0 +1,33 @@
+# OP / ニュース / ED が共有する統一テーマ/BGM 演出（W7）。
+# track_uri は BGM に使う Spotify トラック（共有 URL / spotify:track: / 裸 ID いずれも可、自動正規化）。
+# 演出: (tagline) → BGM フル音量 intro_seconds → ducked_volume へ → 発話 →
+#       曲の「残り outro_seconds 秒」へシーク → フル音量へ戻す → 曲の終わりで停止。
+# W7 は anchor（program.yaml の anchor_dj_id = ずんだもん）が OP/news/ED を読む単一・フラット形。
+# 曜日替わりメイン DJ の by_dj は W13.5、{greeting}/{first_song}/時刻プレースホルダは W8/W10/W13.5 で導入。
+# よって本スライスの announcement は静的（プレースホルダを含めない）。
+opening:
+  track_uri: "spotify:track:5jsqaNOAbeBG5QYL7JpySJ"
+  intro_seconds: 5
+  volume: 100
+  ducked_volume: 35
+  outro_seconds: 10
+  tagline: "ずんだもんの ケイラボAIラジオ"
+  announcement: "こんにちは。ケイラボAIラジオの時間なのだ。お送りするのはずんだもんなのだ。本日もリスナーの皆さんと、ゆったりした時間を過ごしていきたいと思うのだ。なお、本番組の音声合成にはVOICEVOXを使用しているのだ。それでは、ゆっくりしていってほしいのだ。"
+
+# news は staging（+tagline）のみ。announcement は実行時に取得したニュース・天気原稿で差し替える。
+news:
+  track_uri: "spotify:track:7ovUcF5uHTBRzUpB6ZOmvt"
+  intro_seconds: 5
+  volume: 100
+  ducked_volume: 35
+  outro_seconds: 10
+  tagline: "ニュースと天気予報です"
+
+# ED は tagline なし（いきなり BGM）。
+ending:
+  track_uri: "spotify:track:5gf9qeUJUHvhp1TkHUJ2sR"
+  intro_seconds: 5
+  volume: 100
+  ducked_volume: 35
+  outro_seconds: 10
+  announcement: "本日も最後までお聴きいただき、ありがとうございましたなのだ。また次回お会いしましょう。それでは、おやすみなさいなのだ。"

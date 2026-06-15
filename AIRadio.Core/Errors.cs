@@ -127,3 +127,18 @@ public sealed class AudioException : RadioException
     public static AudioException PlaybackFailed(Exception? inner = null) =>
         new("E-RTM-AUDIO-PLAYBACK-001", "音声の再生に失敗しました", inner);
 }
+
+/// <summary>
+/// 番組進行（<see cref="BroadcastEngine"/>）に関するエラー。critical セグメント（既定 OP）が実行時エラーで
+/// 中断したときに放送を中止する媒体（fail-tolerant な非 critical セグメントはスキップして継続する）。
+/// </summary>
+public sealed class BroadcastException : RadioException
+{
+    public override string Code { get; }
+
+    private BroadcastException(string code, string message) : base(message) => Code = code;
+
+    /// <summary>critical セグメントが実行時エラーで中断 → 放送中止。</summary>
+    public static BroadcastException SegmentFailed(string detail) =>
+        new("E-RTM-SEGMENT-FAILED-001", $"放送セグメントが中断しました: {detail}");
+}

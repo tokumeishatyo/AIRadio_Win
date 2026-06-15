@@ -1,0 +1,15 @@
+# 番組フォーマット（W7, v1 = 明示 segments 列）。上から順に実行する。
+# anchor_dj_id: OP / news / ED を読む DJ（djs.yaml の id）。
+# talk は corner_id 必須（corners.yaml の id を参照）。
+# critical: true のセグメントは失敗時にスキップせず放送中止（既定 false。OP のみ true）。
+# コーナー数 N 駆動の自動生成（部品宣言 v2）は W13 で導入する。
+program:
+  title: "ケイラボAIラジオ"
+  anchor_dj_id: zundamon
+  segments:
+    - type: opening
+      critical: true
+    - type: talk
+      corner_id: free_talk
+    - type: news
+    - type: ending
