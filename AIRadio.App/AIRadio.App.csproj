@@ -14,4 +14,9 @@
     <Nullable>enable</Nullable>
   </PropertyGroup>
 
+  <ItemGroup>
+    <!-- 実行ファイル隣（出力ディレクトリ）に config/ を配置し、tts.yaml 等を実行時に読む（Mac 同一レイアウト）。 -->
+    <Content Include="..\config\**\*.yaml" Link="config\%(RecursiveDir)%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
 </Project>

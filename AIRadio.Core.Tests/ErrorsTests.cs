@@ -27,4 +27,16 @@ public class ErrorsTests
         Assert.Equal("E-SPT-NO-DEVICE-001", ex.Code);
         Assert.Contains("Spotify", ex.Message);
     }
+
+    [Fact]
+    public void TtsException_Unreachable_HasStableCode()
+        => Assert.Equal("E-TTS-UNREACHABLE-001", TtsException.Unreachable().Code);
+
+    [Fact]
+    public void TtsException_SynthesisFailed_HasStableCode()
+        => Assert.Equal("E-TTS-SYNTHESIS-FAILED-001", TtsException.SynthesisFailed("x").Code);
+
+    [Fact]
+    public void AudioException_PlaybackFailed_HasStableCode()
+        => Assert.Equal("E-RTM-AUDIO-PLAYBACK-001", AudioException.PlaybackFailed().Code);
 }
