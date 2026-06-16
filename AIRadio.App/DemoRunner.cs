@@ -12,7 +12,7 @@ namespace AIRadio.App;
 //   theme        : BGM ダッキング演出（tagline→BGM→duck→発話→outro→停止）（W4。要 VOICEVOX + Premium）
 //   news         : ニュース見出し + 天気を取得して LLM アナウンサー原稿を生成・表示（W11。キーなしは定型にフォールバック、音声なし）
 //   corner       : Gemini 台本 → 2-DJ 会話 → 締めに一曲（W6。要 Gemini キー + VOICEVOX + Premium）
-//   broadcast    : 番組 1 本（OP → トーク → ニュース → ED）を通し再生（W7。Ctrl-C で完全静寂）
+//   broadcast    : 番組 1 本（コーナー数 N 駆動。default_length=10。OP→冒頭曲→本編→ED）を通し再生（W7/W13。Ctrl-C で完全静寂）
 internal static class DemoRunner
 {
     private static readonly IRadioLog Log = new ConsoleRadioLog();

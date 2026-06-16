@@ -18,20 +18,28 @@ public abstract record BroadcastEvent
     /// <summary>冒頭曲（フル再生）の終端検知の理由（途中切り診断用）。</summary>
     public sealed record SongFinished(int Index, TrackFinishReason Reason) : BroadcastEvent;
 
+    /// <summary>「ED で終了」要求を受け付けた（残りのコーナーを飛ばして ED へ。仕様 s13/w13 §3-4）。</summary>
+    public sealed record EndingRequested : BroadcastEvent;
+
     /// <summary>番組を最後まで完走（正常終了時のみ。中止・キャンセルでは発火しない）。</summary>
     public sealed record BroadcastFinished : BroadcastEvent;
 }
 
 /// <summary>
-/// 番組進行エンジン（W7）。<see cref="ProgramFormat"/> のセグメント列を宣言順に逐次実行し、各セグメントを
-/// 種別で振り分ける（OP/news/ED = <see cref="ThemeSequencer"/>, talk = <see cref="CornerEngine"/>,
+/// 番組進行エンジン（W7 → W13）。<see cref="ProgramPlan"/> がコーナー数 N から決定論的に生成するセグメントを
+/// index 順に実行し（W13。v1 の <c>ProgramFormat</c> セグメント列駆動を置換）、各セグメントを種別で振り分ける
+/// （OP/news/ED = <see cref="ThemeSequencer"/>, talk = <see cref="CornerEngine"/>,
 /// 冒頭曲 = <see cref="SongPicker"/>, news 原稿 = 注入デリゲート）。Mac 版 `BroadcastEngine` の移植。
 ///
 /// <para>**ローリング先読み準備（window=2）**: 実行中セグメントの先 2 つまでの準備（選曲 / LLM 台本 + 全行 TTS /
 /// ニュース原稿）を裏で起動して保持する。これにより、OP と冒頭曲の再生中に次のトーク台本が準備され、
-/// セグメント間の無音（デッドエア）をゼロにする（CLAUDE.md §3-1 の「放送中の完全無音」）。</para>
+/// セグメント間の無音（デッドエア）をゼロにする（CLAUDE.md §3-1 の「放送中の完全無音」）。準備 Task は
+/// セグメント index ごとの linked CTS（<see cref="PreparationLedger"/>）で管理し、停止・ED で選択的にキャンセルする。</para>
 ///
-/// 進行規則（docs/specs/w7-broadcast-engine.md §4）:
+/// <para>**「ED で終了」（W13）**: <see cref="BroadcastControl.RequestEnding"/> を受けると、各セグメント完了時に
+/// 現セグメント（+ 準備完了済みの直後 free_talk）を流したあと残りを飛ばして ED で締める（§3-4）。</para>
+///
+/// 進行規則（docs/specs/w7-broadcast-engine.md §4 / w13-program-generation.md §3）:
 /// - **fail-tolerant**: セグメント失敗はスキップして放送継続（<see cref="BroadcastEvent.SegmentFailed"/>）。
 ///   ただし <see cref="ProgramSegment.Critical"/>（既定 OP）は失敗時に放送中止（<see cref="BroadcastException"/>）。
 /// - **キャンセル即時伝播**: キャンセルはスキップと誤判定せず即時 throw。保持中の準備 Task も連動して止める。
@@ -80,60 +88,56 @@ public sealed class BroadcastEngine
     }
 
     /// <summary>番組を 1 本通しで実行する（単一のキャンセル可能 Task として呼ばれる前提）。</summary>
+    /// <param name="plan">コーナー数 N からセグメントを生成する番組（W13）。</param>
+    /// <param name="control">「ED で終了」操作ハンドル（null なら ED 終了なし）。</param>
     public async Task RunAsync(
-        ProgramFormat format,
+        ProgramPlan plan,
         BroadcastThemes themes,
         IReadOnlyList<CornerTemplate> corners,
         IReadOnlyList<DjProfile> djs,
+        BroadcastControl? control = null,
         CancellationToken ct = default)
     {
-        // 1. preflight（fail-fast、音を出す前）: anchor DJ と talk の corner_id を解決。
-        var anchor = djs.FirstOrDefault(d => d.Id == format.AnchorDjId)
-            ?? throw ConfigException.MissingField($"program.anchor_dj_id に未定義の DJ: {format.AnchorDjId}");
-        foreach (var seg in format.Segments)
+        // 1. preflight（fail-fast、音を出す前）: anchor DJ・talk/letter コーナー・news 読み手を blueprint から検証。
+        var anchor = djs.FirstOrDefault(d => d.Id == plan.AnchorDjId)
+            ?? throw ConfigException.MissingField($"program.anchor_dj_id に未定義の DJ: {plan.AnchorDjId}");
+        foreach (var cornerId in new[] { plan.Blueprint.TalkCornerId, plan.Blueprint.LetterCornerId })
         {
-            if (seg.Kind == SegmentKind.Talk)
+            if (corners.All(c => c.Id != cornerId))
             {
-                var id = seg.CornerId
-                    ?? throw ConfigException.MissingField("program.segments[].corner_id（talk は必須）");
-                if (corners.All(c => c.Id != id))
-                {
-                    throw ConfigException.MissingField($"program.segments[].corner_id に未定義のコーナー: {id}");
-                }
-            }
-            else if (seg.Kind == SegmentKind.News && seg.DjId is string newsDjId && djs.All(d => d.Id != newsDjId))
-            {
-                throw ConfigException.MissingField($"program.segments[].dj_id（news）に未定義の DJ: {newsDjId}");
+                throw ConfigException.MissingField($"program.talk/letter.corner_id に未定義のコーナー: {cornerId}");
             }
         }
+        if (plan.Blueprint.NewsDjId is string newsDjId && djs.All(d => d.Id != newsDjId))
+        {
+            throw ConfigException.MissingField($"program.news.dj_id に未定義の DJ: {newsDjId}");
+        }
 
-        // 準備 Task はエンジン本体のキャンセルに連動して止める（消費されない先読み分の後始末）。
-        using var prepCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        // 準備 Task は ledger が index ごとの linked CTS（エンジン ct 連動）で管理する。
         var ledger = new PreparationLedger();
         try
         {
-            await BroadcastAsync(format, themes, corners, djs, anchor, ledger, prepCts.Token, ct).ConfigureAwait(false);
+            await BroadcastAsync(plan, themes, corners, djs, anchor, control, ledger, ct).ConfigureAwait(false);
         }
         finally
         {
-            // 保持中（未消費）の準備 Task をキャンセルし、観測して未観測例外を残さない。
-            prepCts.Cancel();
+            // 保持中（未消費）の準備 Task をキャンセルし、観測して未観測例外を残さない（生存エントリのみ対象）。
+            ledger.CancelAll();
             await ledger.DrainAsync().ConfigureAwait(false);
         }
     }
 
     private async Task BroadcastAsync(
-        ProgramFormat format,
+        ProgramPlan plan,
         BroadcastThemes themes,
         IReadOnlyList<CornerTemplate> corners,
         IReadOnlyList<DjProfile> djs,
         DjProfile anchor,
+        BroadcastControl? control,
         PreparationLedger ledger,
-        CancellationToken prepCt,
         CancellationToken ct)
     {
-        var segments = format.Segments;
-        var songContext = $"ラジオ番組「{format.Title}」のオープニング直後にかける、本日の1曲目";
+        var songContext = $"ラジオ番組「{plan.Title}」のオープニング直後にかける、本日の1曲目";
 
         // ローリング準備の起動（単一消費者なので進捗はローカル変数で追う）。
         var preparationStartedThrough = -1;
@@ -143,18 +147,18 @@ public sealed class BroadcastEngine
             {
                 preparationStartedThrough++;
                 var index = preparationStartedThrough;
-                if (index >= segments.Count)
+                if (plan.Segment(index) is not ProgramSegment seg)
                 {
-                    return;
+                    return; // 有限番組の末尾（ED の次）に到達。
                 }
-                StartPreparation(index, segments[index], corners, djs, songContext, ledger, prepCt);
+                StartPreparation(index, seg, corners, djs, songContext, ledger, ct);
             }
         }
 
         // 冒頭曲の選曲を待って {first_song}（OP の曲振り）を作る（放送開始前の無音は許容ゾーン）。
         EnsurePrepared(PreparationWindow);
         var extraValues = new Dictionary<string, string> { ["first_song"] = "本日の一曲" };
-        if (segments.Count > 1 && segments[1].Kind == SegmentKind.Song && ledger.SongTask(1) is Task<TrackInfo> pick)
+        if (plan.Segment(1) is { Kind: SegmentKind.Song } && ledger.SongTask(1) is Task<TrackInfo> pick)
         {
             var track = await pick.ConfigureAwait(false);
             if (!string.IsNullOrEmpty(track.Title))
@@ -166,12 +170,38 @@ public sealed class BroadcastEngine
 
         try
         {
-            for (var i = 0; i < segments.Count; i++)
+            var index = 0;
+            while (plan.Segment(index) is ProgramSegment segment)
             {
                 ct.ThrowIfCancellationRequested();
-                EnsurePrepared(i + PreparationWindow);
-                await RunSegmentAsync(i, segments[i], themes, djs, anchor, extraValues, ledger, ct).ConfigureAwait(false);
-                ledger.Discard(i);
+                EnsurePrepared(index + PreparationWindow);
+                await RunSegmentAsync(index, segment, themes, djs, anchor, extraValues, ledger, ct).ConfigureAwait(false);
+                ledger.Discard(index);
+
+                // 「ED で終了」: 直後のトーク（free_talk）が準備完了済みならそれだけ流し、
+                // 残り（お便り / ニュース含む）はすべて飛ばして ED（仕様 s13/w13 §3-4）。
+                if (control is { IsEndingRequested: true } && segment.Kind != SegmentKind.Ending)
+                {
+                    _onEvent?.Invoke(new BroadcastEvent.EndingRequested());
+                    var edIndex = index + 1;
+                    if (plan.Segment(edIndex) is { Kind: SegmentKind.Talk, CornerId: var cornerId } nextTalk
+                        && cornerId == plan.Blueprint.TalkCornerId
+                        && ledger.IsCornerPrepared(edIndex))
+                    {
+                        ledger.CancelAll(keeping: edIndex);   // 窓の外を捨てる
+                        await RunSegmentAsync(edIndex, nextTalk, themes, djs, anchor, extraValues, ledger, ct).ConfigureAwait(false);
+                        ledger.Discard(edIndex);
+                        edIndex++;
+                    }
+                    else
+                    {
+                        ledger.CancelAll();
+                    }
+                    // ED を流して終了（エンドレスは plan に ED が無いため合成。有限も前倒しで同じ）。
+                    await RunSegmentAsync(edIndex, new ProgramSegment(SegmentKind.Ending), themes, djs, anchor, extraValues, ledger, ct).ConfigureAwait(false);
+                    break;
+                }
+                index++;
             }
         }
         catch
@@ -193,30 +223,46 @@ public sealed class BroadcastEngine
         IReadOnlyList<DjProfile> djs,
         string songContext,
         PreparationLedger ledger,
-        CancellationToken prepCt)
+        CancellationToken ct)
     {
         switch (segment.Kind)
         {
             case SegmentKind.Talk:
                 // corner は preflight 済み（必ず見つかる）。準備（LLM 台本 + 全行 TTS）を裏で起動。
                 var corner = corners.First(c => c.Id == segment.CornerId);
-                ledger.AddCorner(index, _cornerRunner.PrepareAsync(corner, djs, prepCt));
+                var talkToken = ledger.BeginPreparation(index, ct);
+                ledger.AddCorner(index, PrepareCornerAsync(corner, djs, index, ledger, talkToken));
                 break;
 
             case SegmentKind.Song:
                 var spec = segment.Song!;
-                ledger.AddSong(index, PickSongAsync(spec, songContext, prepCt));
+                var songToken = ledger.BeginPreparation(index, ct);
+                ledger.AddSong(index, PickSongAsync(spec, songContext, songToken));
                 break;
 
             case SegmentKind.News:
                 // 出現のたびに生成（長時間放送でニュースが更新される）。
-                ledger.AddNews(index, _newsAnnouncement(prepCt));
+                var newsToken = ledger.BeginPreparation(index, ct);
+                ledger.AddNews(index, _newsAnnouncement(newsToken));
                 break;
 
             case SegmentKind.Opening:
             case SegmentKind.Ending:
                 break; // 準備なし
         }
+    }
+
+    /// <summary>
+    /// トーク準備をラップし、<see cref="CornerEngine.PrepareAsync"/> が**成功完了した後にのみ**
+    /// <see cref="PreparationLedger.MarkCornerPrepared"/> する（Mac `BroadcastEngine.swift` の mark-after-prepare 移植）。
+    /// キャンセル / 失敗ではマークしない（「ED で終了」で未完了/faulted なトークを誤って流さないため）。
+    /// </summary>
+    private async Task<PreparedCorner> PrepareCornerAsync(
+        CornerTemplate corner, IReadOnlyList<DjProfile> djs, int index, PreparationLedger ledger, CancellationToken ct)
+    {
+        var prepared = await _cornerRunner.PrepareAsync(corner, djs, ct).ConfigureAwait(false);
+        ledger.MarkCornerPrepared(index);
+        return prepared;
     }
 
     private async Task<TrackInfo> PickSongAsync(SongSegmentSpec spec, string context, CancellationToken ct)
@@ -360,8 +406,13 @@ public sealed class BroadcastEngine
     }
 
     /// <summary>
-    /// ローリング準備の台帳。準備 Task（選曲 / 台本 / ニュース原稿）の保持・消費・破棄をスレッドセーフに行う
-    /// （準備は並行に完了し、後始末は finally から呼ばれる）。
+    /// ローリング準備の台帳（仕様 s13/w13 §3-3）。準備 Task（選曲 / 台本 / ニュース原稿）と、それぞれを止める
+    /// **セグメント index ごとの linked CTS** を保持し、消費・破棄・選択的キャンセルをスレッドセーフに行う
+    /// （準備は並行に完了し、キャンセルは停止 / 「ED で終了」から飛んでくる）。
+    /// <para>CTS のライフサイクル契約: <see cref="Discard"/> と <see cref="DrainAsync"/> は **lock 下で辞書から
+    /// エントリを除去してから** CTS を Dispose する（後続の <see cref="CancelAll"/> が Dispose 済み CTS を
+    /// Cancel して <c>ObjectDisposedException</c> にならないため）。<see cref="DrainAsync"/> は Task を
+    /// await（観測）してから CTS を Dispose する（実行中 Task が観測中のトークンを先に破棄しない）。</para>
     /// </summary>
     private sealed class PreparationLedger
     {
@@ -369,6 +420,16 @@ public sealed class BroadcastEngine
         private readonly Dictionary<int, Task<TrackInfo>> _songTasks = new();
         private readonly Dictionary<int, Task<PreparedCorner>> _cornerTasks = new();
         private readonly Dictionary<int, Task<string>> _newsTasks = new();
+        private readonly Dictionary<int, CancellationTokenSource> _ctsByIndex = new();
+        private readonly HashSet<int> _preparedCorners = new();
+
+        /// <summary>index 用の準備キャンセル源（エンジン ct に連動）を作り token を返す。</summary>
+        public CancellationToken BeginPreparation(int index, CancellationToken engineCt)
+        {
+            var cts = CancellationTokenSource.CreateLinkedTokenSource(engineCt);
+            lock (_lock) { _ctsByIndex[index] = cts; }
+            return cts.Token;
+        }
 
         public void AddSong(int index, Task<TrackInfo> task) { lock (_lock) { _songTasks[index] = task; } }
         public void AddCorner(int index, Task<PreparedCorner> task) { lock (_lock) { _cornerTasks[index] = task; } }
@@ -378,33 +439,76 @@ public sealed class BroadcastEngine
         public Task<PreparedCorner>? CornerTask(int index) { lock (_lock) { return _cornerTasks.GetValueOrDefault(index); } }
         public Task<string>? NewsTask(int index) { lock (_lock) { return _newsTasks.GetValueOrDefault(index); } }
 
-        /// <summary>消費済みの準備を破棄する（ローリング窓の後端）。</summary>
+        /// <summary>トーク準備が**成功完了**したことを記録（ED 判定の「直後トークが準備済みか」用）。</summary>
+        public void MarkCornerPrepared(int index) { lock (_lock) { _preparedCorners.Add(index); } }
+
+        /// <summary>準備が完了済みか（ED 判定用。実行中・未着手・失敗は false）。</summary>
+        public bool IsCornerPrepared(int index) { lock (_lock) { return _preparedCorners.Contains(index); } }
+
+        /// <summary>
+        /// <paramref name="keeping"/> 以外の生存（未除去）index の準備をキャンセルする（Mac <c>cancelAll(keeping:)</c>）。
+        /// Cancel は lock 外で行う（Cancel が登録コールバックを同期実行しうるためデッドロックを避ける）。
+        /// </summary>
+        public void CancelAll(int? keeping = null)
+        {
+            List<CancellationTokenSource> toCancel;
+            lock (_lock)
+            {
+                toCancel = new List<CancellationTokenSource>(_ctsByIndex.Count);
+                foreach (var (index, cts) in _ctsByIndex)
+                {
+                    if (index != keeping) { toCancel.Add(cts); }
+                }
+            }
+            foreach (var cts in toCancel)
+            {
+                try { cts.Cancel(); }
+                catch (ObjectDisposedException) { /* 既に破棄済み = no-op */ }
+            }
+        }
+
+        /// <summary>消費済みの準備を破棄する（ローリング窓の後端）。辞書から除去してから CTS を Dispose。</summary>
         public void Discard(int index)
         {
+            CancellationTokenSource? cts;
             lock (_lock)
             {
                 _songTasks.Remove(index);
                 _cornerTasks.Remove(index);
                 _newsTasks.Remove(index);
+                _preparedCorners.Remove(index);
+                _ctsByIndex.Remove(index, out cts);
             }
+            cts?.Dispose();
         }
 
-        /// <summary>保持中（未消費）の準備 Task をすべて観測する（キャンセル後の未観測例外を防ぐ）。</summary>
+        /// <summary>
+        /// 保持中（未消費）の準備 Task をすべて観測し（キャンセル後の未観測例外を防ぐ）、その後 CTS を Dispose する。
+        /// 辞書は lock 下で抜き取ってクリアするため、二重 Drain は no-op。
+        /// </summary>
         public async Task DrainAsync()
         {
             List<Task> tasks;
+            List<CancellationTokenSource> ctsList;
             lock (_lock)
             {
                 tasks = new List<Task>(_songTasks.Count + _cornerTasks.Count + _newsTasks.Count);
                 tasks.AddRange(_songTasks.Values);
                 tasks.AddRange(_cornerTasks.Values);
                 tasks.AddRange(_newsTasks.Values);
+                ctsList = new List<CancellationTokenSource>(_ctsByIndex.Values);
+                _songTasks.Clear();
+                _cornerTasks.Clear();
+                _newsTasks.Clear();
+                _preparedCorners.Clear();
+                _ctsByIndex.Clear();
             }
             foreach (var task in tasks)
             {
                 try { await task.ConfigureAwait(false); }
                 catch { /* 破棄された準備（キャンセル/失敗）。ここでは観測のみ。 */ }
             }
+            foreach (var cts in ctsList) { cts.Dispose(); }
         }
     }
 }

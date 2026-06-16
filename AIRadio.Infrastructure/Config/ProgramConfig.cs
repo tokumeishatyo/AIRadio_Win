@@ -3,14 +3,16 @@ using AIRadio.Core;
 namespace AIRadio.Infrastructure;
 
 /// <summary>
-/// <c>config/program.yaml</c>（v1 = 明示 <c>segments:</c> 列）のローダ → <see cref="ProgramFormat"/>。
-/// <c>anchor_dj_id</c> / <c>talk</c> の <c>corner_id</c> 欠落、未知の <c>type</c> は fail-fast
-/// （<see cref="ConfigException"/>, <c>E-CFG-MISSING-FIELD-001</c>）。コーナー数 N 駆動の v2 部品宣言は W13 で導入し、
-/// 本ローダ（v1）はその時点で置換する。
+/// <c>config/program.yaml</c>（v2 = 部品宣言）のローダ → <see cref="ProgramBlueprint"/>（仕様 w13 §4）。
+/// セグメント列は <see cref="ProgramPlan"/> がコーナー数 N から生成するため、本ローダは部品（OP/song/talk/letter/news）と
+/// 既定の番組長だけを読む。<c>anchor_dj_id</c> / <c>song.fallback_track_uri</c> / <c>talk.corner_id</c> /
+/// <c>letter.corner_id</c> 欠落、<c>default_length</c> 不正は fail-fast（<see cref="ConfigException"/>,
+/// <c>E-CFG-MISSING-FIELD-001</c>）。曜日替わり編成・ゲスト・特集（<c>weekly_cast</c>/<c>guest</c>/<c>artist_feature</c>）は
+/// 後続スライス（W13.5/W14/W15）で読む。
 /// </summary>
 public static class ProgramConfig
 {
-    public static ProgramFormat FromYaml(string yaml)
+    public static ProgramBlueprint FromYaml(string yaml)
     {
         var dto = YamlConfigLoader.Deserialize<Dto>(yaml);
         var program = dto?.Program ?? throw ConfigException.MissingField("program");
@@ -19,59 +21,58 @@ public static class ProgramConfig
         {
             throw ConfigException.MissingField("program.anchor_dj_id");
         }
-        var segments = program.Segments;
-        if (segments is null || segments.Count == 0)
+        if (program.Song is not SongDto songDto || string.IsNullOrEmpty(songDto.FallbackTrackUri))
         {
-            throw ConfigException.MissingField("program.segments");
+            throw ConfigException.MissingField("program.song.fallback_track_uri");
+        }
+        if (string.IsNullOrEmpty(program.Talk?.CornerId))
+        {
+            throw ConfigException.MissingField("program.talk.corner_id");
+        }
+        if (string.IsNullOrEmpty(program.Letter?.CornerId))
+        {
+            throw ConfigException.MissingField("program.letter.corner_id");
         }
 
-        return new ProgramFormat(
+        return new ProgramBlueprint(
             Title: program.Title ?? "ケイラボAIラジオ",
             AnchorDjId: program.AnchorDjId,
-            Segments: segments.Select(Map).ToList());
+            DefaultLength: ParseDefaultLength(program.DefaultLength),
+            OpeningCritical: program.Opening?.Critical ?? true,
+            Song: new SongSegmentSpec(
+                FallbackTrackUri: SpotifyUri.NormalizeTrack(songDto.FallbackTrackUri),
+                PromptHint: songDto.SongPromptHint ?? "",
+                Volume: songDto.Volume ?? 100,
+                PlaySeconds: songDto.PlaySeconds ?? 0),
+            TalkCornerId: program.Talk.CornerId,
+            LetterCornerId: program.Letter.CornerId,
+            NewsDjId: program.News?.DjId);
     }
 
-    public static ProgramFormat LoadFile(string path) => FromYaml(File.ReadAllText(path));
+    public static ProgramBlueprint LoadFile(string path) => FromYaml(File.ReadAllText(path));
 
-    private static ProgramSegment Map(SegmentDto s)
+    /// <summary>
+    /// <c>default_length</c> を解釈する。YamlDotNet はスカラノード（<c>10</c> / <c>"10"</c> / <c>endless</c> / <c>yes</c> 等）を
+    /// すべて string プロパティへ束縛するため、不正判定は <see cref="ProgramLength.TryParse"/> に一本化する。
+    /// **欠落（key 無し = null）のみ既定 <c>corners(10)</c>** に倒し、空文字・負数・小数・非数値は fail-fast（Mac 一致）。
+    /// corners は 1 以上を要求（メニューに出さない 0 / endless は config 経由でのみ可だが、0 は不正）。
+    /// </summary>
+    private static ProgramLength ParseDefaultLength(string? raw)
     {
-        var kind = ParseKind(s.Type);
-        string? cornerId = null;
-        SongSegmentSpec? song = null;
-        switch (kind)
+        if (raw is null)
         {
-            case SegmentKind.Talk:
-                if (string.IsNullOrEmpty(s.CornerId))
-                {
-                    throw ConfigException.MissingField("program.segments[].corner_id（talk は必須）");
-                }
-                cornerId = s.CornerId;
-                break;
-
-            case SegmentKind.Song:
-                if (string.IsNullOrEmpty(s.FallbackTrackUri))
-                {
-                    throw ConfigException.MissingField("program.segments[].fallback_track_uri（song は必須）");
-                }
-                song = new SongSegmentSpec(
-                    FallbackTrackUri: SpotifyUri.NormalizeTrack(s.FallbackTrackUri),
-                    PromptHint: s.SongPromptHint ?? "",
-                    Volume: s.Volume ?? 100,
-                    PlaySeconds: s.PlaySeconds ?? 0);
-                break;
+            return ProgramLength.FromCorners(10);
         }
-        return new ProgramSegment(kind, cornerId, s.Critical ?? false, song, s.DjId);
+        if (!ProgramLength.TryParse(raw, out var length))
+        {
+            throw ConfigException.MissingField($"program.default_length が不正（1 以上の整数または endless）: {raw}");
+        }
+        if (!length.IsEndless && length.Corners < 1)
+        {
+            throw ConfigException.MissingField($"program.default_length は 1 以上（または endless）: {raw}");
+        }
+        return length;
     }
-
-    private static SegmentKind ParseKind(string? raw) => raw switch
-    {
-        "opening" => SegmentKind.Opening,
-        "song" => SegmentKind.Song,
-        "talk" => SegmentKind.Talk,
-        "news" => SegmentKind.News,
-        "ending" => SegmentKind.Ending,
-        _ => throw ConfigException.MissingField($"program.segments[].type に未知の値: {raw}"),
-    };
 
     public sealed class Dto
     {
@@ -82,18 +83,34 @@ public static class ProgramConfig
     {
         public string? Title { get; set; }
         public string? AnchorDjId { get; set; }
-        public List<SegmentDto>? Segments { get; set; }
+        public string? DefaultLength { get; set; }
+        public OpeningDto? Opening { get; set; }
+        public SongDto? Song { get; set; }
+        public TalkDto? Talk { get; set; }
+        public TalkDto? Letter { get; set; }
+        public NewsDto? News { get; set; }
     }
 
-    public sealed class SegmentDto
+    public sealed class OpeningDto
     {
-        public string? Type { get; set; }
-        public string? CornerId { get; set; }
         public bool? Critical { get; set; }
-        public string? DjId { get; set; }
+    }
+
+    public sealed class SongDto
+    {
         public string? SongPromptHint { get; set; }
         public string? FallbackTrackUri { get; set; }
         public int? Volume { get; set; }
         public int? PlaySeconds { get; set; }
+    }
+
+    public sealed class TalkDto
+    {
+        public string? CornerId { get; set; }
+    }
+
+    public sealed class NewsDto
+    {
+        public string? DjId { get; set; }
     }
 }

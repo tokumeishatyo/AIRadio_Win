@@ -22,7 +22,8 @@ internal sealed class BroadcastComposition
         _log = log;
     }
 
-    public async Task RunAsync(CancellationToken ct)
+    /// <param name="control">「ED で終了」操作ハンドル（トレイから渡す。null なら ED 終了なし）。</param>
+    public async Task RunAsync(CancellationToken ct, BroadcastControl? control = null)
     {
         try
         {
@@ -42,8 +43,12 @@ internal sealed class BroadcastComposition
             var research = ResearchConfig.LoadFile(Path.Combine(_configDir, "research.yaml"));
             var djs = DjsConfig.LoadFile(Path.Combine(_configDir, "djs.yaml"));
             var corners = CornersConfig.LoadFile(Path.Combine(_configDir, "corners.yaml"));
-            var format = ProgramConfig.LoadFile(Path.Combine(_configDir, "program.yaml"));
+            var blueprint = ProgramConfig.LoadFile(Path.Combine(_configDir, "program.yaml"));
             var themes = ThemesConfig.LoadFile(Path.Combine(_configDir, "themes.yaml"));
+
+            // 番組の長さ: メニュー選択（%LOCALAPPDATA% 永続化）が優先、なければ program.yaml の既定値（w13 §5）。
+            var length = new ProgramLengthStore().Read() ?? blueprint.DefaultLength;
+            var plan = new ProgramPlan(blueprint, length);
 
             // 共有インフラ。
             var http = new HttpClientAdapter();
@@ -67,9 +72,9 @@ internal sealed class BroadcastComposition
                 onEvent: e => _log.Log(FormatCornerEvent(e)));
             var news = new NewsRssSource(research.NewsRssUrl, http, research.NewsMaxItems);
             var weather = new JmaWeatherSource(research.WeatherAreaCode, research.WeatherAreaName, http);
-            // ニュースは LLM アナウンサー原稿（W11）。読み手（news セグメントの dj_id、なければ anchor）のペルソナを使う。
+            // ニュースは LLM アナウンサー原稿（W11）。読み手（program.news.dj_id、なければ anchor）のペルソナを使う。
             // LLM 不調時は announcement_template に自己完結フォールバック（fail-tolerant）。
-            var newsDjId = format.Segments.FirstOrDefault(s => s.Kind == SegmentKind.News)?.DjId ?? format.AnchorDjId;
+            var newsDjId = blueprint.NewsDjId ?? blueprint.AnchorDjId;
             var newsPersona = djs.FirstOrDefault(d => d.Id == newsDjId)?.Persona ?? "";
             var newsProvider = new LlmNewsScriptProvider(
                 news, weather, llm, newsPersona, research.LlmScript, research.AnnouncementTemplate);
@@ -84,8 +89,10 @@ internal sealed class BroadcastComposition
                 clock,
                 onEvent: e => _log.Log(FormatBroadcastEvent(e)));
 
-            _log.Log($"放送開始: 「{format.Title}」（{format.Segments.Count} セグメント）");
-            await engine.RunAsync(format, themes, corners, djs, ct).ConfigureAwait(false);
+            var lengthLabel = plan.Length.IsEndless ? "エンドレス" : $"トーク{plan.Length.Corners}本";
+            var countLabel = plan.TotalSegmentCount is int total ? $"・{total} セグメント" : "";
+            _log.Log($"放送開始: 「{plan.Title}」（{lengthLabel}{countLabel}）");
+            await engine.RunAsync(plan, themes, corners, djs, control, ct).ConfigureAwait(false);
         }
         catch (OperationCanceledException)
         {
@@ -106,6 +113,7 @@ internal sealed class BroadcastComposition
         BroadcastEvent.SegmentFailed x => $"⚠ セグメント{x.Index}: {x.Kind} 失敗 [{x.Code}] {x.Detail}",
         BroadcastEvent.SongStarted x => $"  ♪ 冒頭曲: {Label(x.Track)}",
         BroadcastEvent.SongFinished x => $"  ♪ 冒頭曲 終了（検知: {x.Reason}）",
+        BroadcastEvent.EndingRequested => "ED で終了を受け付けました（残りのコーナーを飛ばして ED へ）。",
         BroadcastEvent.BroadcastFinished => "番組を最後まで放送しました。",
         _ => "",
     };

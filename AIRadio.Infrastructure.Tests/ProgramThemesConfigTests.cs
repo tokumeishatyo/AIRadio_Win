@@ -5,123 +5,160 @@ namespace AIRadio.Infrastructure.Tests;
 
 public class ProgramThemesConfigTests
 {
-    // --- program.yaml (v1, 明示 segments 列) ---
+    // --- program.yaml (v2 = 部品宣言) ---
+
+    private const string MinimalProgram =
+        "program:\n" +
+        "  anchor_dj_id: zundamon\n" +
+        "  song:\n    fallback_track_uri: \"spotify:track:X\"\n" +
+        "  talk:\n    corner_id: free_talk\n" +
+        "  letter:\n    corner_id: letter\n";
 
     [Fact]
-    public void Program_FromYaml_LoadsSegmentsInOrder()
+    public void Program_FromYaml_LoadsBlueprint()
     {
         const string yaml =
             "program:\n" +
             "  title: \"テスト番組\"\n" +
             "  anchor_dj_id: zundamon\n" +
-            "  segments:\n" +
-            "    - type: opening\n      critical: true\n" +
-            "    - type: talk\n      corner_id: free_talk\n" +
-            "    - type: news\n" +
-            "    - type: ending\n";
+            "  default_length: 20\n" +
+            "  opening:\n    critical: true\n" +
+            "  song:\n" +
+            "    song_prompt_hint: \"幕開け\"\n" +
+            "    fallback_track_uri: \"https://open.spotify.com/track/ABC?si=x\"\n" +
+            "    volume: 90\n    play_seconds: 30\n" +
+            "  talk:\n    corner_id: free_talk\n" +
+            "  letter:\n    corner_id: letter\n" +
+            "  news:\n    dj_id: ryusei\n";
 
-        var f = ProgramConfig.FromYaml(yaml);
+        var b = ProgramConfig.FromYaml(yaml);
 
-        Assert.Equal("テスト番組", f.Title);
-        Assert.Equal("zundamon", f.AnchorDjId);
-        Assert.Equal(4, f.Segments.Count);
-        Assert.Equal(new ProgramSegment(SegmentKind.Opening, null, true), f.Segments[0]);
-        Assert.Equal(new ProgramSegment(SegmentKind.Talk, "free_talk", false), f.Segments[1]);
-        Assert.Equal(new ProgramSegment(SegmentKind.News, null, false), f.Segments[2]);
-        Assert.Equal(new ProgramSegment(SegmentKind.Ending, null, false), f.Segments[3]);
+        Assert.Equal("テスト番組", b.Title);
+        Assert.Equal("zundamon", b.AnchorDjId);
+        Assert.Equal(ProgramLength.FromCorners(20), b.DefaultLength);
+        Assert.True(b.OpeningCritical);
+        Assert.Equal("spotify:track:ABC", b.Song.FallbackTrackUri);   // 共有 URL → 正規化
+        Assert.Equal("幕開け", b.Song.PromptHint);
+        Assert.Equal(90, b.Song.Volume);
+        Assert.Equal(30, b.Song.PlaySeconds);
+        Assert.Equal("free_talk", b.TalkCornerId);
+        Assert.Equal("letter", b.LetterCornerId);
+        Assert.Equal("ryusei", b.NewsDjId);
+    }
+
+    [Theory]
+    [InlineData("  default_length: 10\n", 10)]
+    [InlineData("  default_length: \"30\"\n", 30)]   // 文字列スカラも可
+    public void Program_DefaultLength_IntOrStringCorners(string line, int corners)
+    {
+        var b = ProgramConfig.FromYaml(MinimalProgram + line);
+        Assert.Equal(ProgramLength.FromCorners(corners), b.DefaultLength);
     }
 
     [Fact]
-    public void Program_ParsesTwoConsecutiveTalks_PreservesOrder()
+    public void Program_DefaultLength_Endless()
     {
-        // W12: OP → song → talk(free_talk) → talk(letter) → news → ED。連続 2 talk が別 corner_id を順序保持で読まれる。
-        const string yaml =
-            "program:\n  title: \"テスト番組\"\n  anchor_dj_id: zundamon\n  segments:\n" +
-            "    - type: opening\n      critical: true\n" +
-            "    - type: talk\n      corner_id: free_talk\n" +
-            "    - type: talk\n      corner_id: letter\n" +
-            "    - type: news\n" +
-            "    - type: ending\n";
-
-        var f = ProgramConfig.FromYaml(yaml);
-
-        Assert.Equal(new ProgramSegment(SegmentKind.Talk, "free_talk", false), f.Segments[1]);
-        Assert.Equal(new ProgramSegment(SegmentKind.Talk, "letter", false), f.Segments[2]);
-        Assert.Equal(SegmentKind.News, f.Segments[3].Kind);
-        Assert.Equal(SegmentKind.Ending, f.Segments[4].Kind);
+        var b = ProgramConfig.FromYaml(MinimalProgram + "  default_length: endless\n");
+        Assert.True(b.DefaultLength.IsEndless);
     }
 
     [Fact]
-    public void Program_TitleDefaults_WhenOmitted()
+    public void Program_DefaultLength_Missing_DefaultsTo10()
     {
-        const string yaml =
-            "program:\n  anchor_dj_id: zundamon\n  segments:\n    - type: opening\n";
+        var b = ProgramConfig.FromYaml(MinimalProgram);   // default_length なし
+        Assert.Equal(ProgramLength.FromCorners(10), b.DefaultLength);
+    }
 
-        var f = ProgramConfig.FromYaml(yaml);
+    [Theory]
+    [InlineData("  default_length: 0\n")]        // 0 は不正（1 以上）
+    [InlineData("  default_length: -1\n")]       // 負数
+    [InlineData("  default_length: abc\n")]      // 非数値
+    [InlineData("  default_length: 10.5\n")]     // 小数
+    [InlineData("  default_length: yes\n")]      // YAML 1.1 特殊スカラ（string 束縛 → TryParse 拒否）
+    [InlineData("  default_length: \"\"\n")]     // 明示的空文字（欠落と区別して fail-fast）
+    public void Program_DefaultLength_Invalid_FailsFast(string line)
+    {
+        var ex = Assert.Throws<ConfigException>(() => ProgramConfig.FromYaml(MinimalProgram + line));
+        Assert.Equal("E-CFG-MISSING-FIELD-001", ex.Code);
+    }
 
-        Assert.Equal("ケイラボAIラジオ", f.Title);
-        Assert.False(f.Segments[0].Critical); // critical 省略は false
+    [Fact]
+    public void Program_TitleDefaults_OpeningCriticalTrue_OptionalsDefault()
+    {
+        var b = ProgramConfig.FromYaml(MinimalProgram);   // title / opening / news / volume 省略
+
+        Assert.Equal("ケイラボAIラジオ", b.Title);
+        Assert.True(b.OpeningCritical);   // 既定 true（Windows 踏襲）
+        Assert.Equal(100, b.Song.Volume); // 既定 100
+        Assert.Equal(0, b.Song.PlaySeconds);
+        Assert.Null(b.NewsDjId);          // 任意
     }
 
     [Fact]
     public void Program_MissingAnchorDj_ThrowsMissingField()
     {
-        const string yaml = "program:\n  segments:\n    - type: opening\n";
+        const string yaml =
+            "program:\n  song:\n    fallback_track_uri: \"spotify:track:X\"\n" +
+            "  talk:\n    corner_id: free_talk\n  letter:\n    corner_id: letter\n";
 
         var ex = Assert.Throws<ConfigException>(() => ProgramConfig.FromYaml(yaml));
         Assert.Equal("E-CFG-MISSING-FIELD-001", ex.Code);
     }
 
     [Fact]
-    public void Program_EmptySegments_ThrowsMissingField()
-        => Assert.Throws<ConfigException>(
-            () => ProgramConfig.FromYaml("program:\n  anchor_dj_id: z\n  segments: []\n"));
-
-    [Fact]
-    public void Program_TalkMissingCornerId_ThrowsMissingField()
-    {
-        const string yaml = "program:\n  anchor_dj_id: z\n  segments:\n    - type: talk\n";
-
-        var ex = Assert.Throws<ConfigException>(() => ProgramConfig.FromYaml(yaml));
-        Assert.Equal("E-CFG-MISSING-FIELD-001", ex.Code);
-    }
-
-    [Fact]
-    public void Program_UnknownSegmentType_ThrowsMissingField()
-    {
-        const string yaml = "program:\n  anchor_dj_id: z\n  segments:\n    - type: bogus\n";
-
-        var ex = Assert.Throws<ConfigException>(() => ProgramConfig.FromYaml(yaml));
-        Assert.Equal("E-CFG-MISSING-FIELD-001", ex.Code);
-    }
-
-    [Fact]
-    public void Program_ParsesSongSegment_NormalizesUri()
+    public void Program_MissingSongFallbackUri_ThrowsMissingField()
     {
         const string yaml =
-            "program:\n  anchor_dj_id: zundamon\n  segments:\n" +
-            "    - type: song\n      song_prompt_hint: \"幕開け\"\n" +
-            "      fallback_track_uri: \"https://open.spotify.com/track/ABC?si=x\"\n" +
-            "      volume: 90\n      play_seconds: 30\n";
-
-        var f = ProgramConfig.FromYaml(yaml);
-
-        var song = f.Segments[0];
-        Assert.Equal(SegmentKind.Song, song.Kind);
-        Assert.NotNull(song.Song);
-        Assert.Equal("spotify:track:ABC", song.Song!.FallbackTrackUri); // 共有 URL → 正規化
-        Assert.Equal("幕開け", song.Song.PromptHint);
-        Assert.Equal(90, song.Song.Volume);
-        Assert.Equal(30, song.Song.PlaySeconds);
-    }
-
-    [Fact]
-    public void Program_SongMissingFallbackUri_ThrowsMissingField()
-    {
-        const string yaml = "program:\n  anchor_dj_id: z\n  segments:\n    - type: song\n";
+            "program:\n  anchor_dj_id: zundamon\n  talk:\n    corner_id: free_talk\n  letter:\n    corner_id: letter\n";
 
         var ex = Assert.Throws<ConfigException>(() => ProgramConfig.FromYaml(yaml));
         Assert.Equal("E-CFG-MISSING-FIELD-001", ex.Code);
+    }
+
+    [Fact]
+    public void Program_MissingTalkCorner_ThrowsMissingField()
+    {
+        const string yaml =
+            "program:\n  anchor_dj_id: zundamon\n  song:\n    fallback_track_uri: \"spotify:track:X\"\n" +
+            "  letter:\n    corner_id: letter\n";
+
+        var ex = Assert.Throws<ConfigException>(() => ProgramConfig.FromYaml(yaml));
+        Assert.Equal("E-CFG-MISSING-FIELD-001", ex.Code);
+    }
+
+    [Fact]
+    public void Program_MissingLetterCorner_ThrowsMissingField()
+    {
+        const string yaml =
+            "program:\n  anchor_dj_id: zundamon\n  song:\n    fallback_track_uri: \"spotify:track:X\"\n" +
+            "  talk:\n    corner_id: free_talk\n";
+
+        var ex = Assert.Throws<ConfigException>(() => ProgramConfig.FromYaml(yaml));
+        Assert.Equal("E-CFG-MISSING-FIELD-001", ex.Code);
+    }
+
+    [Fact]
+    public void Program_NormalizesBareTrackId()
+    {
+        const string yaml =
+            "program:\n  anchor_dj_id: zundamon\n  song:\n    fallback_track_uri: \"ABC\"\n" +
+            "  talk:\n    corner_id: free_talk\n  letter:\n    corner_id: letter\n";
+
+        var b = ProgramConfig.FromYaml(yaml);
+        Assert.Equal("spotify:track:ABC", b.Song.FallbackTrackUri);
+    }
+
+    [Fact]
+    public void Program_IgnoresFutureSliceKeys()
+    {
+        // weekly_cast / guest / artist_feature（W13.5/W14/W15）は v2 では無視され壊れない。
+        const string yaml = MinimalProgram +
+            "  weekly_cast:\n    monday: [zundamon, metan]\n" +
+            "  guest:\n    corner_id: guest_corner\n" +
+            "  artist_feature:\n    corner_id: feature\n";
+
+        var b = ProgramConfig.FromYaml(yaml);
+        Assert.Equal("free_talk", b.TalkCornerId);   // 正常ロード（未知キーは無視）
     }
 
     // --- themes.yaml ---
