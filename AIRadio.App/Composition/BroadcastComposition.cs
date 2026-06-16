@@ -67,7 +67,12 @@ internal sealed class BroadcastComposition
                 onEvent: e => _log.Log(FormatCornerEvent(e)));
             var news = new NewsRssSource(research.NewsRssUrl, http, research.NewsMaxItems);
             var weather = new JmaWeatherSource(research.WeatherAreaCode, research.WeatherAreaName, http);
-            var newsProvider = new NewsWeatherProvider(news, weather, research.AnnouncementTemplate);
+            // ニュースは LLM アナウンサー原稿（W11）。読み手（news セグメントの dj_id、なければ anchor）のペルソナを使う。
+            // LLM 不調時は announcement_template に自己完結フォールバック（fail-tolerant）。
+            var newsDjId = format.Segments.FirstOrDefault(s => s.Kind == SegmentKind.News)?.DjId ?? format.AnchorDjId;
+            var newsPersona = djs.FirstOrDefault(d => d.Id == newsDjId)?.Persona ?? "";
+            var newsProvider = new LlmNewsScriptProvider(
+                news, weather, llm, newsPersona, research.LlmScript, research.AnnouncementTemplate);
             var songPicker = new SongPicker(llm, searcher, llmConfig.Temperature);
 
             var engine = new BroadcastEngine(

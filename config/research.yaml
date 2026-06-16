@@ -14,8 +14,11 @@ weather:
 # （Provider は未知キーとして原文保持 → エンジンで二段展開。ローリング先読みのズレを受けず再生時点で正確）。
 announcement_template: "時刻は{hour12}時{minute}分になりました。ニュースの時間です。{news} 続いて、天気予報です。{weather} 以上、ニュースと天気予報でした。"
 
-# LLM によるアナウンサー原稿生成は W11 で実装（本スライスでは読み飛ばす）。
-# llm_script:
-#   style_hint: "落ち着いた低めのトーンで、聞き手に語りかけるように簡潔に"
-#   target_minutes: 2
-#   chars_per_minute: 320
+# LLM によるアナウンサー原稿生成（W11）。時報イントロと締めは固定、本文だけ LLM が書く。
+# 読み手のペルソナは program.yaml の news セグメント dj_id（青山龍星）から取る。
+# LLM 不調時は上の announcement_template に倒す（fail-tolerant）。
+llm_script:
+  style_hint: "落ち着いた低めのトーンで、聞き手に語りかけるように簡潔に"
+  target_minutes: 2
+  chars_per_minute: 320
+  # intro / outro は省略時の既定を使用（時報イントロ / 「以上、ニュースと天気予報でした。」）

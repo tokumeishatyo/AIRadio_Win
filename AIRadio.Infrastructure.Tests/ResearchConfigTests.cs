@@ -27,19 +27,56 @@ public class ResearchConfigTests
     }
 
     [Fact]
-    public void FromYaml_IgnoresUnknownLlmScriptSection()
+    public void FromYaml_LoadsLlmScript_WhenPresent()
     {
-        // llm_script は W11 用。読み飛ばされてロードは成功する。
+        // llm_script（W11）を NewsScriptStyle に読み込む。intro/outro 省略は既定（固定文）。
         const string yaml =
             "weather:\n" +
             "  area_code: \"130000\"\n" +
             "llm_script:\n" +
             "  style_hint: \"落ち着いたトーン\"\n" +
-            "  target_minutes: 2\n";
+            "  target_minutes: 3\n" +
+            "  chars_per_minute: 300\n";
 
         var config = ResearchConfig.FromYaml(yaml);
 
-        Assert.Equal("130000", config.WeatherAreaCode);
+        Assert.Equal("落ち着いたトーン", config.LlmScript.StyleHint);
+        Assert.Equal(3, config.LlmScript.TargetMinutes);
+        Assert.Equal(300, config.LlmScript.CharsPerMinute);
+        Assert.Equal(900, config.LlmScript.TargetCharacters);                 // 3 * 300
+        Assert.Contains("{hour12}", config.LlmScript.Intro);                  // 省略 → 既定の時報イントロ
+        Assert.Equal("以上、ニュースと天気予報でした。", config.LlmScript.Outro); // 省略 → 既定アウトロ
+    }
+
+    [Fact]
+    public void FromYaml_LlmScriptDefaults_WhenOmitted()
+    {
+        const string yaml = "weather:\n  area_code: \"016000\"\n";
+
+        var config = ResearchConfig.FromYaml(yaml);
+
+        Assert.Equal("", config.LlmScript.StyleHint);
+        Assert.Equal(2, config.LlmScript.TargetMinutes);
+        Assert.Equal(320, config.LlmScript.CharsPerMinute);
+        Assert.Equal(640, config.LlmScript.TargetCharacters);                 // 既定 2 * 320
+    }
+
+    [Fact]
+    public void FromYaml_LlmScript_OverridesIntroAndOutro_AndMixesWithDefaults()
+    {
+        // intro/outro は YAML で上書き可（spec §4）。style_hint/target_minutes 省略は既定（混在）。
+        const string yaml =
+            "weather:\n  area_code: \"130000\"\n" +
+            "llm_script:\n" +
+            "  intro: \"カスタムイントロ。\"\n" +
+            "  outro: \"カスタムアウトロ。\"\n";
+
+        var config = ResearchConfig.FromYaml(yaml);
+
+        Assert.Equal("カスタムイントロ。", config.LlmScript.Intro);     // 上書き
+        Assert.Equal("カスタムアウトロ。", config.LlmScript.Outro);     // 上書き
+        Assert.Equal("", config.LlmScript.StyleHint);                  // 省略 → 既定
+        Assert.Equal(2, config.LlmScript.TargetMinutes);              // 省略 → 既定
     }
 
     [Fact]

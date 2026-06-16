@@ -10,7 +10,7 @@ namespace AIRadio.App;
 //   spotify      : 検索 → プレフライト（isPlayable）表示（W2）
 //   spotify-play : 検索 → 先頭曲を再生 → 数秒後に停止（W3。要 Premium + アクティブデバイス）
 //   theme        : BGM ダッキング演出（tagline→BGM→duck→発話→outro→停止）（W4。要 VOICEVOX + Premium）
-//   news         : ニュース見出し + 天気を取得して定型原稿を生成・表示（W5。fail-tolerant、音声なし）
+//   news         : ニュース見出し + 天気を取得して LLM アナウンサー原稿を生成・表示（W11。キーなしは定型にフォールバック、音声なし）
 //   corner       : Gemini 台本 → 2-DJ 会話 → 締めに一曲（W6。要 Gemini キー + VOICEVOX + Premium）
 //   broadcast    : 番組 1 本（OP → トーク → ニュース → ED）を通し再生（W7。Ctrl-C で完全静寂）
 internal static class DemoRunner
@@ -260,7 +260,7 @@ internal static class DemoRunner
 
     private static async Task<int> RunNewsDemoAsync()
     {
-        Log.Log("ケイラボAIラジオ (Windows) — W5 ニュース・天気デモ（fail-tolerant、音声なし）");
+        Log.Log("ケイラボAIラジオ (Windows) — W11 ニュース LLM 原稿デモ（fail-tolerant、音声なし）");
         var configPath = Path.Combine(ConfigDir, "research.yaml");
         ResearchConfig config;
         try
@@ -276,13 +276,31 @@ internal static class DemoRunner
         IHttpClient http = new HttpClientAdapter();
         var news = new NewsRssSource(config.NewsRssUrl, http, config.NewsMaxItems);
         var weather = new JmaWeatherSource(config.WeatherAreaCode, config.WeatherAreaName, http);
-        var provider = new NewsWeatherProvider(news, weather, config.AnnouncementTemplate);
+
+        // LLM キーがあれば LLM 原稿（青山龍星のペルソナ）、なければ定型テンプレ原稿（フォールバック動作の確認も兼ねる）。
+        Func<CancellationToken, Task<string>> announce;
+        try
+        {
+            var llmConfig = LlmConfig.LoadFiles(
+                Path.Combine(ConfigDir, "llm.yaml"), Path.Combine(ConfigDir, "llm.local.yaml"));
+            var djs = DjsConfig.LoadFile(Path.Combine(ConfigDir, "djs.yaml"));
+            var persona = djs.FirstOrDefault(d => d.Id == "ryusei")?.Persona ?? "";
+            var llm = new GeminiLLMBackend(llmConfig, http);
+            announce = new LlmNewsScriptProvider(
+                news, weather, llm, persona, config.LlmScript, config.AnnouncementTemplate).AnnouncementAsync;
+            Log.Log("LLM 原稿生成（Gemini）で表示します。");
+        }
+        catch (RadioException)
+        {
+            Log.Log("（LLM キー未設定のため定型テンプレ原稿で表示します）");
+            announce = new NewsWeatherProvider(news, weather, config.AnnouncementTemplate).AnnouncementAsync;
+        }
 
         Log.Log($"取得中…（RSS={config.NewsRssUrl} / 天気={config.WeatherAreaName}[{config.WeatherAreaCode}]）");
-        var announcement = await provider.AnnouncementAsync();
+        var announcement = await announce(default);
         Log.Log("--- ニュース原稿 ---");
         Log.Log(announcement);
-        Log.Log("W5 OK（取得失敗時はフォールバック文言）。");
+        Log.Log("W11 OK（LLM 不調・取得失敗時はフォールバック）。");
         return 0;
     }
 
