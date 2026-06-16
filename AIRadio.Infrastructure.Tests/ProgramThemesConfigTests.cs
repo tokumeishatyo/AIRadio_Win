@@ -32,6 +32,26 @@ public class ProgramThemesConfigTests
     }
 
     [Fact]
+    public void Program_ParsesTwoConsecutiveTalks_PreservesOrder()
+    {
+        // W12: OP → song → talk(free_talk) → talk(letter) → news → ED。連続 2 talk が別 corner_id を順序保持で読まれる。
+        const string yaml =
+            "program:\n  title: \"テスト番組\"\n  anchor_dj_id: zundamon\n  segments:\n" +
+            "    - type: opening\n      critical: true\n" +
+            "    - type: talk\n      corner_id: free_talk\n" +
+            "    - type: talk\n      corner_id: letter\n" +
+            "    - type: news\n" +
+            "    - type: ending\n";
+
+        var f = ProgramConfig.FromYaml(yaml);
+
+        Assert.Equal(new ProgramSegment(SegmentKind.Talk, "free_talk", false), f.Segments[1]);
+        Assert.Equal(new ProgramSegment(SegmentKind.Talk, "letter", false), f.Segments[2]);
+        Assert.Equal(SegmentKind.News, f.Segments[3].Kind);
+        Assert.Equal(SegmentKind.Ending, f.Segments[4].Kind);
+    }
+
+    [Fact]
     public void Program_TitleDefaults_WhenOmitted()
     {
         const string yaml =

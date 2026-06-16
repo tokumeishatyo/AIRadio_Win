@@ -19,17 +19,19 @@ public sealed class DialogueScriptGenerator
 
     public async Task<DialogueScript> GenerateAsync(
         CornerTemplate corner, IReadOnlyList<DjProfile> djs, TrackInfo song, string? theme = null,
+        string dateContext = "", ListenerLetter? letter = null,
         CancellationToken ct = default)
     {
-        var request = MakeRequest(corner, djs, song, theme, _temperature);
+        var request = MakeRequest(corner, djs, song, theme, dateContext, letter, _temperature);
         var raw = await _llm.GenerateAsync(request, ct).ConfigureAwait(false);
         return Parse(raw, djs);
     }
 
-    // MARK: - プロンプト構築（W6: free_talk。挨拶/お便り/ゲスト/日付/長期記憶は後続スライスで追加）
+    // MARK: - プロンプト構築（W6: free_talk / W12: お便り + 日付・季節。挨拶/ゲスト/長期記憶は後続スライス）
 
     public static LLMRequest MakeRequest(
         CornerTemplate corner, IReadOnlyList<DjProfile> djs, TrackInfo song, string? theme = null,
+        string dateContext = "", ListenerLetter? letter = null,
         double temperature = 0.9)
     {
         var selectedTheme = theme ?? corner.Theme;
@@ -39,15 +41,24 @@ public sealed class DialogueScriptGenerator
 
         // フォールバック曲はタイトル不明（URI のみ）のことがある。その場合は曲名を捏造させず匿名で紹介させる。
         var songIntro = song.Title.Length == 0
-            ? "曲名を明かさず「この後の一曲」として曲振りして締める。曲名やアーティスト名を推測して言ってはいけない。"
-            : $"「{song.Artist}」の「{song.Title}」を紹介して締める。";
-        var songInstruction = $"コーナーの最後は、テーマの余韻から自然に{songIntro}";
+            ? "曲名を明かさず「この後の一曲」として曲振りしてコーナーを締める。曲名やアーティスト名を推測して言ってはいけない。"
+            : $"「{song.Artist}」の「{song.Title}」を紹介してコーナーを締める。";
+        var songInstruction = letter is not null
+            ? $"コーナーの最後は、{letter.RadioName}さんからのリクエスト曲として、{songIntro}"
+            : $"コーナーの最後は、テーマの余韻から自然に{songIntro}";
 
         var sections = new List<string>
         {
             $"ラジオコーナー「{corner.Title}」の会話台本を書いてください。",
-            $"# テーマ\n{selectedTheme}",
         };
+        // お便りコーナー（W12）はテーマの代わりにお便り本文を渡す。それ以外はテーマ。
+        sections.Add(letter is not null
+            ? $"# リスナーからのお便り\nラジオネーム: {letter.RadioName}\n{letter.Body}"
+            : $"# テーマ\n{selectedTheme}");
+        if (dateContext.Length > 0)
+        {
+            sections.Add($"# 今日の日付と季節\n{dateContext}");
+        }
 
         var constraints = new List<string>
         {
@@ -56,9 +67,18 @@ public sealed class DialogueScriptGenerator
             $"DJ名は「{names}」のみ。ナレーション、ト書き、見出し、記号装飾は書かない。",
             $"進行はメイン「{main}」が主導し、ほかの出演者は相槌・ツッコミ・応答で自然に返す。",
             "各 DJ は上記プロフィールにある自分の一人称・口調・語尾だけを使う。ある DJ の特徴的な語尾（例:「〜のだ」）を、その DJ 以外のセリフに混ぜてはいけない（とくにメインの語尾を他の出演者に伝染させない）。",
-            "これは番組の途中のコーナー。挨拶・自己紹介・番組名の名乗りはせず、いきなり本題から始める。",
-            songInstruction,
+            "これは番組の途中のコーナー。挨拶・自己紹介・番組名の名乗りはせず、いきなり本題から始める。このあとも別のコーナーが続くので、番組全体を締めくくる言い方（「本日最後の曲」「ラストナンバー」「また来週」「お別れの時間」など）はしない。",
         };
+        if (letter is not null)
+        {
+            constraints.Add($"メインがまず「ラジオネーム {letter.RadioName}さんからのお便り」と紹介し、本文をセリフとして自然に読み上げる。");
+            constraints.Add($"読み上げのあと、出演者でお便りへの感想を話す（テーマ: {selectedTheme}。脱線してよい）。");
+        }
+        if (dateContext.Length > 0)
+        {
+            constraints.Add("季節や時候の話は、上の日付・季節に合わせる。");
+        }
+        constraints.Add(songInstruction);
         sections.Add("# 制約\n" + string.Join("\n", constraints.Select(c => $"- {c}")));
 
         var system =

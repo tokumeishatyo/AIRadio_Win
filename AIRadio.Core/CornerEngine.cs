@@ -5,6 +5,9 @@ public abstract record CornerEvent
 {
     public sealed record ThemeSelected(string Theme) : CornerEvent;
 
+    /// <summary>お便りコーナー（W12）で架空リスナーのお便りを生成した（ラジオネーム）。</summary>
+    public sealed record LetterReady(string RadioName) : CornerEvent;
+
     public sealed record SongPicked(TrackInfo Track) : CornerEvent;
 
     public sealed record ScriptReady(int LineCount, int TotalCharacters) : CornerEvent;
@@ -41,7 +44,12 @@ public sealed class CornerEngine
     private readonly IClock _clock;
     private readonly double _temperature;
     private readonly Action<CornerEvent>? _onEvent;
+    /// <summary>テーマプールからの選択用乱数（count → 0..count-1 のインデックス。テストは決定論的に注入）。</summary>
+    private readonly Func<int, int> _randomIndex;
+    private readonly TimeZoneInfo _timeZone;
 
+    /// <param name="randomIndex">テーマプール選択用の乱数（W12。省略時は <see cref="Random.Shared"/>）。</param>
+    /// <param name="timeZone">日付・季節コンテキストの解釈に使うタイムゾーン（W12。省略時は <see cref="TimeZoneInfo.Local"/>）。</param>
     public CornerEngine(
         ILLMBackend llm,
         ITTSBackend tts,
@@ -50,7 +58,9 @@ public sealed class CornerEngine
         ISpotifyController spotify,
         IClock clock,
         double temperature = 0.9,
-        Action<CornerEvent>? onEvent = null)
+        Action<CornerEvent>? onEvent = null,
+        Func<int, int>? randomIndex = null,
+        TimeZoneInfo? timeZone = null)
     {
         _llm = llm;
         _tts = tts;
@@ -60,6 +70,8 @@ public sealed class CornerEngine
         _clock = clock;
         _temperature = temperature;
         _onEvent = onEvent;
+        _randomIndex = randomIndex ?? (n => Random.Shared.Next(n));
+        _timeZone = timeZone ?? TimeZoneInfo.Local;
     }
 
     /// <summary>準備 + 本番を続けて実行（単発デモ用）。</summary>
@@ -73,25 +85,42 @@ public sealed class CornerEngine
     public async Task<PreparedCorner> PrepareAsync(
         CornerTemplate corner, IReadOnlyList<DjProfile> djs, CancellationToken ct = default)
     {
-        if (corner.Format != CornerFormat.FreeTalk)
+        if (corner.Format is not (CornerFormat.FreeTalk or CornerFormat.Letter))
         {
-            // letter（W12）/ guest（W14）/ artist_feature（W15）は本スライス未対応。
-            throw ConfigException.MissingField($"{corner.Format} は W6 CornerEngine では未対応（free_talk のみ）");
+            // guest（W14）/ artist_feature（W15）は本スライス未対応。
+            throw ConfigException.MissingField($"{corner.Format} は CornerEngine では未対応（free_talk / letter のみ）");
         }
 
         var cast = ResolveCast(corner.DjIds, djs);
-        var theme = corner.Theme;
+        var theme = SelectTheme(corner);
         _onEvent?.Invoke(new CornerEvent.ThemeSelected(theme));
+        var dateContext = SeasonPhrases.DateContext(_clock.Now, _timeZone);
 
         var picker = new SongPicker(_llm, _searcher, _temperature);
         var generator = new DialogueScriptGenerator(_llm, _temperature);
 
-        var songContext = $"ラジオコーナー「{corner.Title}」（テーマ: {theme}）の締めにかける曲";
+        // letter: ①お便り生成 → ②リクエスト曲（お便り内容を選曲コンテキストに）→ ③台本（読み上げ + 感想 + 曲振り）。
+        // free_talk: ①選曲 → ②台本。いずれも曲紹介テキストの生成より前に再生可否を確定する（§3-2）。
+        ListenerLetter? letter = null;
+        string songContext;
+        if (corner.Format == CornerFormat.Letter)
+        {
+            letter = await new ListenerLetterGenerator(_llm, _temperature)
+                .GenerateAsync(theme, dateContext, ct).ConfigureAwait(false);
+            _onEvent?.Invoke(new CornerEvent.LetterReady(letter.RadioName));
+            songContext = $"ラジオコーナー「{corner.Title}」でリスナーのお便りに応えてかけるリクエスト曲。お便りの内容: {letter.Body}";
+        }
+        else
+        {
+            songContext = $"ラジオコーナー「{corner.Title}」（テーマ: {theme}）の締めにかける曲";
+        }
+
         var song = await picker.PickAsync(
             new SongRequest(songContext, corner.FallbackTrackUri, corner.SongPromptHint), ct).ConfigureAwait(false);
         _onEvent?.Invoke(new CornerEvent.SongPicked(song));
 
-        var script = await generator.GenerateAsync(corner, cast, song, theme, ct).ConfigureAwait(false);
+        var script = await generator.GenerateAsync(
+            corner, cast, song, theme: theme, dateContext: dateContext, letter: letter, ct: ct).ConfigureAwait(false);
         _onEvent?.Invoke(new CornerEvent.ScriptReady(script.Lines.Count, script.TotalCharacters));
 
         // 全行を事前合成（本番の TTS 待ちをゼロに。準備は OP・冒頭曲の再生中に進む想定）。
@@ -176,6 +205,17 @@ public sealed class CornerEngine
             cast.Add(dj);
         }
         return cast;
+    }
+
+    /// <summary>テーマプールから 1 つ選ぶ（W12）。空/null なら <see cref="CornerTemplate.Theme"/> 固定。</summary>
+    private string SelectTheme(CornerTemplate corner)
+    {
+        var pool = corner.ThemePool;
+        if (pool is null || pool.Count == 0)
+        {
+            return corner.Theme;
+        }
+        return pool[_randomIndex(pool.Count)];
     }
 
     private static int SpeakerIdFor(DialogueLine line, IReadOnlyList<DjProfile> cast)

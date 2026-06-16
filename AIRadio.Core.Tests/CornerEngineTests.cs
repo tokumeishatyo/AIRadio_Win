@@ -60,16 +60,83 @@ public class CornerEngineTests
         }
     }
 
-    [Fact]
-    public async Task PrepareAsync_NonFreeTalk_ThrowsConfigException()
+    [Theory]
+    [InlineData(CornerFormat.Guest)]        // W14
+    [InlineData(CornerFormat.ArtistFeature)] // W15
+    public async Task PrepareAsync_UnsupportedFormat_ThrowsConfigException(CornerFormat format)
     {
+        // letter は W12 で対応済み。guest / artist_feature は引き続き未対応（同一ガード）。
         var engine = new CornerEngine(
             new ScriptedLLM(), new InMemoryTTS(), new SpyAudioPlayer(),
             new FakeTrackSearcher(), new FakeSpotifyController(), new FakeClock());
         var corner = new CornerTemplate(
-            "letter", "お便り", "x", CornerFormat.Letter, new[] { "zundamon" }, "spotify:track:fb");
+            "x", "X", "x", format, new[] { "zundamon" }, "spotify:track:fb");
 
         await Assert.ThrowsAsync<ConfigException>(() => engine.PrepareAsync(corner, Djs));
+    }
+
+    [Fact]
+    public async Task PrepareAsync_ThemePool_SelectsViaInjectedRandom()
+    {
+        var llm = new ScriptedLLM("アイドル - YOASOBI", ScriptResponse);
+        var searcher = new FakeTrackSearcher(new[] { new TrackInfo("spotify:track:idol", "アイドル", "YOASOBI", IsPlayable: true) });
+        var events = new List<CornerEvent>();
+        var engine = new CornerEngine(
+            llm, new InMemoryTTS(), new SpyAudioPlayer(), searcher, new FakeSpotifyController(), new FakeClock(),
+            onEvent: e => { lock (events) { events.Add(e); } },
+            randomIndex: _ => 1); // プールの index 1 を決定論的に選ぶ
+        var corner = FreeTalkCorner() with { ThemePool = new[] { "お酒", "旅行", "音楽" } };
+
+        await engine.PrepareAsync(corner, Djs);
+
+        Assert.Contains(events, e => e is CornerEvent.ThemeSelected ts && ts.Theme == "旅行"); // index 1
+    }
+
+    [Fact]
+    public async Task PrepareAsync_EmptyThemePool_UsesFixedTheme()
+    {
+        var llm = new ScriptedLLM("アイドル - YOASOBI", ScriptResponse);
+        var searcher = new FakeTrackSearcher(new[] { new TrackInfo("spotify:track:idol", "アイドル", "YOASOBI", IsPlayable: true) });
+        var events = new List<CornerEvent>();
+        var engine = new CornerEngine(
+            llm, new InMemoryTTS(), new SpyAudioPlayer(), searcher, new FakeSpotifyController(), new FakeClock(),
+            onEvent: e => { lock (events) { events.Add(e); } });
+
+        await engine.PrepareAsync(FreeTalkCorner(), Djs); // ThemePool null → corner.Theme "音楽"
+
+        Assert.Contains(events, e => e is CornerEvent.ThemeSelected ts && ts.Theme == "音楽");
+    }
+
+    [Fact]
+    public async Task RunAsync_Letter_GeneratesLetter_PicksSongFromLetterBody_BuildsScript()
+    {
+        // LLM 呼び出し順: ①お便り → ②リクエスト曲候補 → ③台本（letter 3 段）。
+        var llm = new ScriptedLLM(
+            "ずんだ太郎\n最近旅行に行って楽しかったです。",  // ①お便り
+            "アイドル - YOASOBI",                          // ②曲候補
+            ScriptResponse);                               // ③台本
+        var searcher = new FakeTrackSearcher(new[] { new TrackInfo("spotify:track:idol", "アイドル", "YOASOBI", IsPlayable: true) });
+        var spotify = new FakeSpotifyController();
+        var audio = new SpyAudioPlayer();
+        var events = new List<CornerEvent>();
+        var engine = new CornerEngine(
+            llm, new InMemoryTTS(), audio, searcher, spotify, new FakeClock(),
+            onEvent: e => { lock (events) { events.Add(e); } });
+        var corner = new CornerTemplate(
+            "letter", "お便りのコーナー", "旅行", CornerFormat.Letter,
+            new[] { "zundamon", "metan" }, "spotify:track:fb", Volume: 100, PlaySeconds: 5);
+
+        await engine.RunAsync(corner, Djs);
+
+        // ① お便り生成イベント（ラジオネーム）。
+        Assert.Contains(events, e => e is CornerEvent.LetterReady lr && lr.RadioName == "ずんだ太郎");
+        // ② 選曲コンテキストにお便り本文が乗る（SongPicker への LLM プロンプト）。
+        Assert.Contains(llm.Requests, r => r.Prompt.Contains("お便りの内容: 最近旅行に行って楽しかったです。"));
+        // ③ 台本プロンプトにお便り節（ラジオネーム + 本文）。
+        Assert.Contains(llm.Requests, r => r.Prompt.Contains("# リスナーからのお便り") && r.Prompt.Contains("ずんだ太郎"));
+        // 台本が発話され、最後は完全静寂。
+        Assert.Equal(4, audio.Played.Count);
+        Assert.Equal(new SpotifyEvent.Pause(), spotify.Events.Last());
     }
 
     [Fact]

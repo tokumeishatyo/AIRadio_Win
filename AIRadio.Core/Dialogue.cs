@@ -31,8 +31,9 @@ public enum CornerFormat
 
 /// <summary>
 /// コーナーのテンプレート（<c>config/corners.yaml</c>）。基本パターン: テーマについて DJ 二人が会話し、最後に一曲かける。
-/// W6 は基本フィールドのみ。テーマプール・時報リード文・アーティスト特集パラメータは後続スライスで追加する。
+/// <see cref="ThemePool"/> でテーマプール（W12）に対応。時報リード文・アーティスト特集パラメータは後続スライスで追加する。
 /// </summary>
+/// <param name="ThemePool">テーマのプール（W12）。空/null なら準備のたび <see cref="Theme"/> 固定、非空なら毎回ランダムに 1 つ選ぶ。</param>
 public sealed record CornerTemplate(
     string Id,
     string Title,
@@ -44,7 +45,8 @@ public sealed record CornerTemplate(
     int CharsPerMinute = 320,
     string SongPromptHint = "",
     int Volume = 85,
-    int PlaySeconds = 0)
+    int PlaySeconds = 0,
+    IReadOnlyList<string>? ThemePool = null)
 {
     /// <summary>台本の目標文字数（5 分 × 320 字/分 ≒ 1600 字）。</summary>
     public int TargetCharacters => TargetMinutes * CharsPerMinute;

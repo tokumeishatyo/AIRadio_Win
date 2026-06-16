@@ -56,24 +56,72 @@ public class DjsCornersConfigTests
     }
 
     [Fact]
-    public void Corners_IgnoresUnknownFields_AndMapsLetterFormat()
+    public void Corners_LoadsThemePool_AndMapsLetterFormat()
     {
-        // themes / lead_in は W12/W13.5 用。読み飛ばしてロードできる。format=letter は enum へマップ。
+        // themes（W12）を ThemePool に読み込む。lead_in（W13.5）は読み飛ばす。format=letter は enum へマップ。
         const string yaml =
             "corners:\n" +
             "  - id: letter\n    title: \"お便り\"\n    format: letter\n    theme: \"x\"\n" +
-            "    lead_in: \"{hour}時です\"\n    themes: [\"a\", \"b\"]\n" +
+            "    lead_in: \"{hour}時です\"\n    themes: [\"a\", \"b\", \"c\"]\n" +
             "    dj_ids: [zundamon]\n    fallback_track_uri: \"spotify:track:fb\"\n";
 
         var corners = CornersConfig.FromYaml(yaml);
 
         Assert.Equal(CornerFormat.Letter, corners[0].Format);
+        Assert.Equal(new[] { "a", "b", "c" }, corners[0].ThemePool); // themes → ThemePool
+    }
+
+    [Fact]
+    public void Corners_NoThemes_ThemePoolNull()
+    {
+        const string yaml =
+            "corners:\n  - id: free_talk\n    title: \"フリートーク\"\n    theme: \"音楽\"\n" +
+            "    dj_ids: [zundamon]\n    fallback_track_uri: \"spotify:track:fb\"\n";
+
+        var corners = CornersConfig.FromYaml(yaml);
+
+        Assert.Null(corners[0].ThemePool); // 省略時は null（= Theme 固定）
+    }
+
+    [Fact]
+    public void Corners_EmptyThemesList_ThemePoolEmptyOrNull()
+    {
+        // themes: [] は空プール → SelectTheme は Theme 固定に倒す（null/空を同一視）。
+        const string yaml =
+            "corners:\n  - id: free_talk\n    title: \"フリートーク\"\n    theme: \"音楽\"\n    themes: []\n" +
+            "    dj_ids: [zundamon]\n    fallback_track_uri: \"spotify:track:fb\"\n";
+
+        var corners = CornersConfig.FromYaml(yaml);
+
+        Assert.True(corners[0].ThemePool is null || corners[0].ThemePool!.Count == 0);
     }
 
     [Fact]
     public void Corners_MissingFallbackUri_ThrowsMissingField()
     {
-        const string yaml = "corners:\n  - id: x\n    title: \"X\"\n    dj_ids: [a]\n";
+        const string yaml = "corners:\n  - id: x\n    title: \"X\"\n    theme: \"音楽\"\n    dj_ids: [a]\n";
+
+        var ex = Assert.Throws<ConfigException>(() => CornersConfig.FromYaml(yaml));
+        Assert.Equal("E-CFG-MISSING-FIELD-001", ex.Code);
+    }
+
+    [Fact]
+    public void Corners_MissingTheme_ThrowsMissingField()
+    {
+        // theme 必須（Mac 一致, §4-3）。
+        const string yaml =
+            "corners:\n  - id: x\n    title: \"X\"\n    dj_ids: [a]\n    fallback_track_uri: \"spotify:track:fb\"\n";
+
+        var ex = Assert.Throws<ConfigException>(() => CornersConfig.FromYaml(yaml));
+        Assert.Equal("E-CFG-MISSING-FIELD-001", ex.Code);
+    }
+
+    [Fact]
+    public void Corners_MissingDjIds_ThrowsMissingField()
+    {
+        // dj_ids 必須（Mac 一致, §4-3）。
+        const string yaml =
+            "corners:\n  - id: x\n    title: \"X\"\n    theme: \"音楽\"\n    fallback_track_uri: \"spotify:track:fb\"\n";
 
         var ex = Assert.Throws<ConfigException>(() => CornersConfig.FromYaml(yaml));
         Assert.Equal("E-CFG-MISSING-FIELD-001", ex.Code);
@@ -82,9 +130,9 @@ public class DjsCornersConfigTests
     [Fact]
     public void Corners_UnknownFormat_ThrowsMissingField()
     {
-        // 不正な format 値は fail-fast で拒否（§4-3 起動時設定不正）。
+        // 不正な format 値は fail-fast で拒否（§4-3 起動時設定不正）。必須フィールドは揃えて format 検証に到達させる。
         const string yaml =
-            "corners:\n  - id: x\n    title: \"X\"\n    format: bogus\n" +
+            "corners:\n  - id: x\n    title: \"X\"\n    theme: \"音楽\"\n    format: bogus\n" +
             "    dj_ids: [a]\n    fallback_track_uri: \"spotify:track:fb\"\n";
 
         var ex = Assert.Throws<ConfigException>(() => CornersConfig.FromYaml(yaml));
