@@ -4,8 +4,8 @@ namespace AIRadio.Infrastructure;
 
 /// <summary>
 /// <c>config/corners.yaml</c> のローダ（コーナーテンプレート一覧 → <see cref="CornerTemplate"/>）。
-/// テーマプール（<c>themes</c>, W12）を読み込む。時報リード文（lead_in, W13.5）・アーティスト特集パラメータ（W15）は
-/// 後続スライスで追加（<c>IgnoreUnmatchedProperties</c> により現時点の YAML に在っても読み飛ばす）。
+/// テーマプール（<c>themes</c>, W12）・時報リード文（<c>lead_in</c>, W13.5）を読み込む（空/未指定は <see cref="CornerTemplate.LeadIn"/> = null）。
+/// アーティスト特集パラメータ（W15）は後続スライスで追加（<c>IgnoreUnmatchedProperties</c> により現時点の YAML に在っても読み飛ばす）。
 /// id/title/theme/dj_ids/fallback_track_uri は必須（欠落は <c>E-CFG-MISSING-FIELD-001</c> で fail-fast。Mac 一致, §4-3）。
 /// </summary>
 public static class CornersConfig
@@ -58,7 +58,8 @@ public static class CornersConfig
             SongPromptHint: c.SongPromptHint ?? "",
             Volume: c.Volume ?? 85,
             PlaySeconds: c.PlaySeconds ?? 0,
-            ThemePool: c.Themes);
+            ThemePool: c.Themes,
+            LeadIn: c.LeadIn);
     }
 
     private static CornerFormat ParseFormat(string? raw) => raw switch
@@ -89,5 +90,6 @@ public static class CornersConfig
         public string? FallbackTrackUri { get; set; }
         public int? Volume { get; set; }
         public int? PlaySeconds { get; set; }
+        public string? LeadIn { get; set; }
     }
 }

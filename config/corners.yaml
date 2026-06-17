@@ -20,6 +20,8 @@ corners:
       - "季節の楽しみ"
       - "最近ちょっと気になっていること"
     format: free_talk
+    # 時報リード文（W13.5）。冒頭トーク以外で、その日のメインが発話直前に時刻展開して読む。
+    lead_in: "{ampm}{hour}時{minute}分になりました。ここからはフリートークのコーナーです。"
     dj_ids: [zundamon, metan]
     target_minutes: 5
     chars_per_minute: 320
@@ -42,6 +44,7 @@ corners:
       - "季節の楽しみ"
       - "最近ちょっと気になっていること"
     format: letter
+    lead_in: "{ampm}{hour}時{minute}分になりました。ここからはお便りのコーナーです。"
     dj_ids: [zundamon, metan]
     target_minutes: 4
     chars_per_minute: 320

@@ -19,19 +19,21 @@ public sealed class DialogueScriptGenerator
 
     public async Task<DialogueScript> GenerateAsync(
         CornerTemplate corner, IReadOnlyList<DjProfile> djs, TrackInfo song, string? theme = null,
-        string dateContext = "", ListenerLetter? letter = null,
+        string dateContext = "", ListenerLetter? letter = null, string? greeting = null,
         CancellationToken ct = default)
     {
-        var request = MakeRequest(corner, djs, song, theme, dateContext, letter, _temperature);
+        var request = MakeRequest(corner, djs, song, theme, dateContext, letter, greeting, _temperature);
         var raw = await _llm.GenerateAsync(request, ct).ConfigureAwait(false);
         return Parse(raw, djs);
     }
 
-    // MARK: - プロンプト構築（W6: free_talk / W12: お便り + 日付・季節。挨拶/ゲスト/長期記憶は後続スライス）
+    // MARK: - プロンプト構築（W6: free_talk / W12: お便り + 日付・季節 / W13.5: 冒頭挨拶 greeting。ゲスト/長期記憶は後続スライス）
 
+    /// <param name="djs">出演者（**順序付き・先頭＝メイン**）。メインが主導し、他は相槌・ツッコミ・応答で返す（W13.5 §6）。</param>
+    /// <param name="greeting">冒頭コーナーのみ非 null（時刻連動の挨拶語）。非 null＝挨拶＋出演者紹介、null＝挨拶抑制で即本題。</param>
     public static LLMRequest MakeRequest(
         CornerTemplate corner, IReadOnlyList<DjProfile> djs, TrackInfo song, string? theme = null,
-        string dateContext = "", ListenerLetter? letter = null,
+        string dateContext = "", ListenerLetter? letter = null, string? greeting = null,
         double temperature = 0.9)
     {
         var selectedTheme = theme ?? corner.Theme;
@@ -67,8 +69,16 @@ public sealed class DialogueScriptGenerator
             $"DJ名は「{names}」のみ。ナレーション、ト書き、見出し、記号装飾は書かない。",
             $"進行はメイン「{main}」が主導し、ほかの出演者は相槌・ツッコミ・応答で自然に返す。",
             "各 DJ は上記プロフィールにある自分の一人称・口調・語尾だけを使う。ある DJ の特徴的な語尾（例:「〜のだ」）を、その DJ 以外のセリフに混ぜてはいけない（とくにメインの語尾を他の出演者に伝染させない）。",
-            "これは番組の途中のコーナー。挨拶・自己紹介・番組名の名乗りはせず、いきなり本題から始める。このあとも別のコーナーが続くので、番組全体を締めくくる言い方（「本日最後の曲」「ラストナンバー」「また来週」「お別れの時間」など）はしない。",
         };
+        // 冒頭コーナーのみ挨拶＋出演者紹介。それ以外は挨拶・自己紹介・番組名を抑制して即本題（W13.5 §4）。
+        if (greeting is not null)
+        {
+            constraints.Add($"これは番組の最初のコーナー。メイン「{main}」がまず「{greeting}」とリスナーに挨拶し、番組名「ケイラボAIラジオ」と本日の出演者（「{names}」）を紹介してから本題に入る。");
+        }
+        else
+        {
+            constraints.Add("これは番組の途中のコーナー。挨拶・自己紹介・番組名の名乗りはせず、いきなり本題から始める。このあとも別のコーナーが続くので、番組全体を締めくくる言い方（「本日最後の曲」「ラストナンバー」「また来週」「お別れの時間」など）はしない。");
+        }
         if (letter is not null)
         {
             constraints.Add($"メインがまず「ラジオネーム {letter.RadioName}さんからのお便り」と紹介し、本文をセリフとして自然に読み上げる。");

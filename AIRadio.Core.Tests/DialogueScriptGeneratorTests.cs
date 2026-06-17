@@ -125,4 +125,39 @@ public class DialogueScriptGeneratorTests
         Assert.Contains("ラストナンバー", request.Prompt); // 禁止例が明示されている
         Assert.Contains("コーナーを締める", request.Prompt); // 締めはコーナー単位
     }
+
+    [Fact]
+    public void MakeRequest_WithGreeting_OpeningCorner_IntroducesCast_NotMidProgram()
+    {
+        // 冒頭トーク（greeting 非 null）: 挨拶 + 番組名 + 出演者紹介。番組の途中分岐・終了風抑止は出さない（W13.5 §4）。
+        var corner = new CornerTemplate(
+            "free_talk", "フリートーク", "音楽", CornerFormat.FreeTalk,
+            new[] { "zundamon", "metan" }, "spotify:track:fb");
+        var song = new TrackInfo("spotify:track:x", "アイドル", "YOASOBI");
+
+        var request = DialogueScriptGenerator.MakeRequest(corner, Djs, song, theme: "音楽", greeting: "おはようございます");
+
+        Assert.Contains("番組の最初のコーナー", request.Prompt);
+        Assert.Contains("おはようございます", request.Prompt);             // 挨拶語
+        Assert.Contains("ケイラボAIラジオ", request.Prompt);              // 番組名の名乗り
+        Assert.Contains("ずんだもん", request.Prompt);                    // 出演者紹介（names）
+        Assert.DoesNotContain("これは番組の途中のコーナー", request.Prompt); // 途中分岐は出さない
+        Assert.DoesNotContain("番組全体を締めくくる言い方", request.Prompt); // 冒頭に終了風抑止は付けない
+    }
+
+    [Fact]
+    public void MakeRequest_WithoutGreeting_KeepsMidProgramAntiShowCloseClause()
+    {
+        // 非冒頭（greeting null）: W12 の「番組の途中 + 終了風抑止」を完全な文言で維持する（Mac の短縮形に置換しない）。
+        var corner = new CornerTemplate(
+            "free_talk", "フリートーク", "音楽", CornerFormat.FreeTalk,
+            new[] { "zundamon", "metan" }, "spotify:track:fb");
+        var song = new TrackInfo("spotify:track:x", "アイドル", "YOASOBI");
+
+        var request = DialogueScriptGenerator.MakeRequest(corner, Djs, song, theme: "音楽"); // greeting なし
+
+        Assert.Contains("これは番組の途中のコーナー", request.Prompt);
+        Assert.Contains("番組全体を締めくくる言い方", request.Prompt); // 終了風抑止句を維持
+        Assert.DoesNotContain("番組の最初のコーナー", request.Prompt);
+    }
 }

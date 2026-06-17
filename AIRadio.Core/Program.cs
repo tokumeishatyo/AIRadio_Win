@@ -107,16 +107,16 @@ public readonly record struct ProgramLength
 
 /// <summary>
 /// 番組の部品宣言（<c>config/program.yaml</c> v2）。セグメント列は <see cref="ProgramPlan"/> がここから決定論的に生成する
-/// （w13 §1/§4）。曜日替わり編成・ゲスト・特集・ジャーナルは後続スライス（W13.5/W14/W15/W18）で追加し、本型には持ち込まない。
+/// （w13 §1/§4）。曜日替わり編成（<see cref="WeeklyCast"/>, W13.5）を持つ。ゲスト・特集・ジャーナルは後続スライス（W14/W15/W18）で追加。
 /// </summary>
 /// <param name="Title">番組名（OP/ED 等の表示・選曲コンテキスト・ログ用）。</param>
-/// <param name="AnchorDjId">OP / news / ED を読む DJ（<c>djs.yaml</c> の id）。</param>
+/// <param name="AnchorDjId">OP / news / ED の既定・spiel フォールバック用 DJ（<c>djs.yaml</c> の id）。曜日替わりのメインが優先（W13.5）。</param>
 /// <param name="DefaultLength">メニュー「番組の長さ」の既定値（<c>program.yaml</c> の <c>default_length</c>）。</param>
 /// <param name="OpeningCritical">OP 失敗で放送を中止するか（既定 true、Windows 踏襲）。</param>
 /// <param name="Song">冒頭曲（OP 直後の 1 曲）。</param>
 /// <param name="TalkCornerId">トークコーナー（<c>corners.yaml</c> の id）。番組の長さ N はこのコーナーの本数。</param>
 /// <param name="LetterCornerId">お便りコーナー（<c>corners.yaml</c> の id）。</param>
-/// <param name="NewsDjId">ニュースの読み手（null なら anchor）。</param>
+/// <param name="NewsDjId">ニュースの読み手（null なら anchor。曜日に依存しない固定読み手）。</param>
 public sealed record ProgramBlueprint(
     string Title,
     string AnchorDjId,
@@ -125,7 +125,11 @@ public sealed record ProgramBlueprint(
     SongSegmentSpec Song,
     string TalkCornerId,
     string LetterCornerId,
-    string? NewsDjId = null);
+    string? NewsDjId = null)
+{
+    /// <summary>曜日替わり編成（先頭＝メイン。W13.5）。既定は <see cref="WeeklyCast.Standard"/>（program.yaml で上書き可）。</summary>
+    public WeeklyCast WeeklyCast { get; init; } = WeeklyCast.Standard;
+}
 
 /// <summary>
 /// コーナー数 N から決定論的に生成される番組（仕様 s13/w13 §1）。
@@ -238,23 +242,83 @@ public sealed class BroadcastControl
 }
 
 /// <summary>
-/// OP / news / ED のテーマ演出設定束（<c>config/themes.yaml</c>）。W7 は anchor が読む単一・フラット形
-/// （曜日替わり DJ・<c>by_dj</c> は W13.5）。news の announcement は実行時のニュース原稿で差し替えるため
-/// <see cref="News"/> は staging（+tagline）のみを持つ。
+/// 曜日替わり編成（W13.5 §1）。曜日 → 順序付き DJ id（先頭＝メイン）。メインが OP・ED・時報リード文・トークを仕切る。
+/// Mac <c>WeeklyCast</c>（Calendar weekday 1=日…7=土 の Int キー）の移植で、Win は C# の <see cref="DayOfWeek"/> を直接キーにする
+/// （意味は同一・+1 変換を避ける）。乱数なし・完全決定論（テストは固定日付）。
 /// </summary>
-/// <param name="Opening">OP の BGM 演出（tagline 込み）。</param>
-/// <param name="OpeningAnnouncement">
-/// OP の固定口上（<c>{first_song}</c> を含むと冒頭曲の曲振り、時刻プレースホルダ（<c>{greeting}</c> 等, W8）を含むと
-/// 発話直前に実時刻が入る）。
-/// </param>
+public sealed class WeeklyCast
+{
+    public IReadOnlyDictionary<DayOfWeek, IReadOnlyList<string>> Casts { get; }
+
+    public WeeklyCast(IReadOnlyDictionary<DayOfWeek, IReadOnlyList<string>> casts) => Casts = casts;
+
+    /// <summary>指定日の編成（先頭＝メイン）。未定義の曜日は空配列。</summary>
+    public IReadOnlyList<string> DjIds(DateTimeOffset date, TimeZoneInfo? timeZone = null)
+    {
+        var tz = timeZone ?? TimeZoneInfo.Local;
+        var day = TimeZoneInfo.ConvertTime(date, tz).DayOfWeek;
+        return Casts.TryGetValue(day, out var ids) ? ids : Array.Empty<string>();
+    }
+
+    /// <summary>指定日のメイン（編成の先頭）。未定義なら null。</summary>
+    public string? MainDjId(DateTimeOffset date, TimeZoneInfo? timeZone = null)
+        => DjIds(date, timeZone) is { Count: > 0 } ids ? ids[0] : null;
+
+    /// <summary>確定表（<c>weekly_cast</c> 省略時の既定。Mac <c>WeeklyCast.standard</c> 一致。日曜は 3 人運営）。</summary>
+    public static WeeklyCast Standard { get; } = new(new Dictionary<DayOfWeek, IReadOnlyList<string>>
+    {
+        [DayOfWeek.Sunday] = new[] { "zundamon", "metan", "tsumugi" },
+        [DayOfWeek.Monday] = new[] { "zundamon", "metan" },
+        [DayOfWeek.Tuesday] = new[] { "metan", "tsumugi" },
+        [DayOfWeek.Wednesday] = new[] { "tsumugi", "zundamon" },
+        [DayOfWeek.Thursday] = new[] { "zundamon", "metan" },
+        [DayOfWeek.Friday] = new[] { "metan", "tsumugi" },
+        [DayOfWeek.Saturday] = new[] { "tsumugi", "zundamon" },
+    });
+}
+
+/// <summary>OP / ED の DJ 別固定口上（口調込み・YAML 由来で不変。W13.5 §2）。</summary>
+/// <param name="Announcement">本文（時刻プレースホルダ <c>{greeting}</c> 等・<c>{first_song}</c> を含み、発話直前に展開）。</param>
+/// <param name="Tagline">BGM 前の一言（OP のみ。ED は null）。</param>
+public sealed record DjSpiel(string Announcement, string? Tagline = null);
+
+/// <summary>
+/// テーマ系セグメント（OP / ED）。BGM 演出（<see cref="Staging"/>）は共有、口上は DJ 別（その日のメインのものを使う。W13.5 §2）。
+/// <see cref="Staging"/> の tagline は無視し、発話直前にメインの tagline を載せる（ED は tagline なし）。
+/// </summary>
+public sealed record ThemedSegment(ThemeConfig Staging, IReadOnlyDictionary<string, DjSpiel> ByDj)
+{
+    /// <summary>メインを優先し、無ければ fallbacks の順、それも無ければ任意の 1 件（Mac <c>spiel(preferring:fallbacks:)</c> 一致）。</summary>
+    public DjSpiel? Spiel(string preferring, IReadOnlyList<string>? fallbacks = null)
+    {
+        if (ByDj.TryGetValue(preferring, out var spiel))
+        {
+            return spiel;
+        }
+        if (fallbacks is not null)
+        {
+            foreach (var id in fallbacks)
+            {
+                if (ByDj.TryGetValue(id, out var fallback))
+                {
+                    return fallback;
+                }
+            }
+        }
+        return ByDj.Values.FirstOrDefault();
+    }
+}
+
+/// <summary>
+/// 放送で使うテーマ一式（<c>config/themes.yaml</c>）。OP / ED は DJ 別固定口上（<see cref="ThemedSegment"/>、W13.5）、
+/// news は単一（<see cref="ThemeConfig"/>。読み手は龍星固定。announcement は実行時のニュース原稿で差し替え）。
+/// </summary>
+/// <param name="Opening">OP の共有 BGM 演出 + DJ 別口上。</param>
 /// <param name="News">news の BGM 演出（tagline 込み。announcement は実行時注入）。</param>
-/// <param name="Ending">ED の BGM 演出（tagline なし = いきなり BGM）。</param>
-/// <param name="EndingAnnouncement">ED の固定口上。</param>
-/// <param name="Greetings">時間帯挨拶（<c>{greeting}</c> の値。OP/news/ED の発話直前展開で共有, W8）。</param>
+/// <param name="Ending">ED の共有 BGM 演出 + DJ 別口上（tagline なし）。</param>
+/// <param name="Greetings">時間帯挨拶（<c>{greeting}</c> の値。発話直前展開で共有, W8）。</param>
 public sealed record BroadcastThemes(
-    ThemeConfig Opening,
-    string OpeningAnnouncement,
+    ThemedSegment Opening,
     ThemeConfig News,
-    ThemeConfig Ending,
-    string EndingAnnouncement,
+    ThemedSegment Ending,
     Greetings Greetings);

@@ -113,11 +113,21 @@ public sealed class BroadcastEngine
             throw ConfigException.MissingField($"program.news.dj_id に未定義の DJ: {newsDjId}");
         }
 
+        // 当日の編成（先頭＝メイン）を解決（W13.5。空・未定義 id は fail-fast）。OP/ED/トークを仕切る。
+        var castDjIds = plan.Blueprint.WeeklyCast.DjIds(_clock.Now, _timeZone);
+        if (castDjIds.Count == 0)
+        {
+            throw ConfigException.MissingField("weekly_cast: 本日（曜日）の編成が定義されていません");
+        }
+        var cast = castDjIds.Select(id => djs.FirstOrDefault(d => d.Id == id)
+            ?? throw ConfigException.MissingField($"weekly_cast に未定義の DJ: {id}")).ToList();
+        var main = cast[0];
+
         // 準備 Task は ledger が index ごとの linked CTS（エンジン ct 連動）で管理する。
         var ledger = new PreparationLedger();
         try
         {
-            await BroadcastAsync(plan, themes, corners, djs, anchor, control, ledger, ct).ConfigureAwait(false);
+            await BroadcastAsync(plan, themes, corners, djs, anchor, cast, main, control, ledger, ct).ConfigureAwait(false);
         }
         finally
         {
@@ -133,11 +143,18 @@ public sealed class BroadcastEngine
         IReadOnlyList<CornerTemplate> corners,
         IReadOnlyList<DjProfile> djs,
         DjProfile anchor,
+        IReadOnlyList<DjProfile> cast,
+        DjProfile main,
         BroadcastControl? control,
         PreparationLedger ledger,
         CancellationToken ct)
     {
         var songContext = $"ラジオ番組「{plan.Title}」のオープニング直後にかける、本日の1曲目";
+        var castDjIds = cast.Select(d => d.Id).ToList();
+        // 冒頭挨拶を付ける「番組最初のトーク」セグメント index（通常 2。無ければ -1）。
+        var firstTalkIndex = FirstTalkIndex(plan);
+        // 冒頭コーナーの時刻連動の挨拶語（準備時点で解決。再生まで数分なので時間帯ズレはほぼ無い、W13.5 §3）。
+        var greeting = TimePhrases.Values(_clock.Now, themes.Greetings, _timeZone).GetValueOrDefault("greeting");
 
         // ローリング準備の起動（単一消費者なので進捗はローカル変数で追う）。
         var preparationStartedThrough = -1;
@@ -151,7 +168,7 @@ public sealed class BroadcastEngine
                 {
                     return; // 有限番組の末尾（ED の次）に到達。
                 }
-                StartPreparation(index, seg, corners, djs, songContext, ledger, ct);
+                StartPreparation(index, seg, corners, djs, songContext, castDjIds, firstTalkIndex, greeting, ledger, ct);
             }
         }
 
@@ -175,7 +192,7 @@ public sealed class BroadcastEngine
             {
                 ct.ThrowIfCancellationRequested();
                 EnsurePrepared(index + PreparationWindow);
-                await RunSegmentAsync(index, segment, themes, djs, anchor, extraValues, ledger, ct).ConfigureAwait(false);
+                await RunSegmentAsync(index, segment, themes, djs, anchor, main, extraValues, ledger, ct).ConfigureAwait(false);
                 ledger.Discard(index);
 
                 // 「ED で終了」: 直後のトーク（free_talk）が準備完了済みならそれだけ流し、
@@ -189,7 +206,7 @@ public sealed class BroadcastEngine
                         && ledger.IsCornerPrepared(edIndex))
                     {
                         ledger.CancelAll(keeping: edIndex);   // 窓の外を捨てる
-                        await RunSegmentAsync(edIndex, nextTalk, themes, djs, anchor, extraValues, ledger, ct).ConfigureAwait(false);
+                        await RunSegmentAsync(edIndex, nextTalk, themes, djs, anchor, main, extraValues, ledger, ct).ConfigureAwait(false);
                         ledger.Discard(edIndex);
                         edIndex++;
                     }
@@ -198,7 +215,7 @@ public sealed class BroadcastEngine
                         ledger.CancelAll();
                     }
                     // ED を流して終了（エンドレスは plan に ED が無いため合成。有限も前倒しで同じ）。
-                    await RunSegmentAsync(edIndex, new ProgramSegment(SegmentKind.Ending), themes, djs, anchor, extraValues, ledger, ct).ConfigureAwait(false);
+                    await RunSegmentAsync(edIndex, new ProgramSegment(SegmentKind.Ending), themes, djs, anchor, main, extraValues, ledger, ct).ConfigureAwait(false);
                     break;
                 }
                 index++;
@@ -222,6 +239,9 @@ public sealed class BroadcastEngine
         IReadOnlyList<CornerTemplate> corners,
         IReadOnlyList<DjProfile> djs,
         string songContext,
+        IReadOnlyList<string> castDjIds,
+        int firstTalkIndex,
+        string? greeting,
         PreparationLedger ledger,
         CancellationToken ct)
     {
@@ -230,8 +250,13 @@ public sealed class BroadcastEngine
             case SegmentKind.Talk:
                 // corner は preflight 済み（必ず見つかる）。準備（LLM 台本 + 全行 TTS）を裏で起動。
                 var corner = corners.First(c => c.Id == segment.CornerId);
+                // 冒頭トークにのみ時刻連動の挨拶、他コーナーは時報リード文（W13.5 §3）。cast は当日編成（先頭＝メイン）。
+                var context = new CornerContext(
+                    CastDjIds: castDjIds,
+                    Greeting: index == firstTalkIndex ? greeting : null,
+                    LeadIn: index == firstTalkIndex ? null : corner.LeadIn);
                 var talkToken = ledger.BeginPreparation(index, ct);
-                ledger.AddCorner(index, PrepareCornerAsync(corner, djs, index, ledger, talkToken));
+                ledger.AddCorner(index, PrepareCornerAsync(corner, djs, context, index, ledger, talkToken));
                 break;
 
             case SegmentKind.Song:
@@ -258,11 +283,30 @@ public sealed class BroadcastEngine
     /// キャンセル / 失敗ではマークしない（「ED で終了」で未完了/faulted なトークを誤って流さないため）。
     /// </summary>
     private async Task<PreparedCorner> PrepareCornerAsync(
-        CornerTemplate corner, IReadOnlyList<DjProfile> djs, int index, PreparationLedger ledger, CancellationToken ct)
+        CornerTemplate corner, IReadOnlyList<DjProfile> djs, CornerContext context, int index, PreparationLedger ledger, CancellationToken ct)
     {
-        var prepared = await _cornerRunner.PrepareAsync(corner, djs, ct).ConfigureAwait(false);
+        var prepared = await _cornerRunner.PrepareAsync(corner, djs, context, ct).ConfigureAwait(false);
         ledger.MarkCornerPrepared(index);
         return prepared;
+    }
+
+    /// <summary>番組内で最初の talk セグメントの index（冒頭挨拶を付ける対象。通常 2。無ければ -1）。Mac `firstTalkIndex` 移植。</summary>
+    private static int FirstTalkIndex(ProgramPlan plan)
+    {
+        var index = 0;
+        while (plan.Segment(index) is ProgramSegment seg)
+        {
+            if (seg.Kind == SegmentKind.Talk)
+            {
+                return index;
+            }
+            index++;
+            if (index > 8)
+            {
+                break; // 安全弁: 冒頭付近にあるはず（無ければ talk なし番組。エンドレスの無限ループ回避も兼ねる）
+            }
+        }
+        return -1;
     }
 
     private async Task<TrackInfo> PickSongAsync(SongSegmentSpec spec, string context, CancellationToken ct)
@@ -293,6 +337,7 @@ public sealed class BroadcastEngine
         BroadcastThemes themes,
         IReadOnlyList<DjProfile> djs,
         DjProfile anchor,
+        DjProfile main,
         IReadOnlyDictionary<string, string> extraValues,
         PreparationLedger ledger,
         CancellationToken ct)
@@ -300,7 +345,7 @@ public sealed class BroadcastEngine
         _onEvent?.Invoke(new BroadcastEvent.SegmentStarted(index, segment.Kind));
         try
         {
-            await PerformAsync(index, segment, themes, djs, anchor, extraValues, ledger, ct).ConfigureAwait(false);
+            await PerformAsync(index, segment, themes, djs, anchor, main, extraValues, ledger, ct).ConfigureAwait(false);
             _onEvent?.Invoke(new BroadcastEvent.SegmentFinished(index, segment.Kind));
         }
         catch (Exception ex) when (ex is OperationCanceledException || ct.IsCancellationRequested)
@@ -329,6 +374,7 @@ public sealed class BroadcastEngine
         BroadcastThemes themes,
         IReadOnlyList<DjProfile> djs,
         DjProfile anchor,
+        DjProfile main,
         IReadOnlyDictionary<string, string> extraValues,
         PreparationLedger ledger,
         CancellationToken ct)
@@ -336,10 +382,15 @@ public sealed class BroadcastEngine
         switch (segment.Kind)
         {
             case SegmentKind.Opening:
+            {
+                // その日のメインが読み、メインの口上を使う（無ければ anchor → 先頭の順。W13.5 §7）。
+                var opSpiel = themes.Opening.Spiel(main.Id, new[] { anchor.Id }) ?? new DjSpiel("");
+                var opStaging = themes.Opening.Staging with { Tagline = opSpiel.Tagline };
                 await _themeSequencer
-                    .RunAsync(themes.Opening, Expand(themes.Greetings, themes.OpeningAnnouncement, extraValues), anchor.SpeakerId, ct)
+                    .RunAsync(opStaging, Expand(themes.Greetings, opSpiel.Announcement, extraValues), main.SpeakerId, ct)
                     .ConfigureAwait(false);
                 break;
+            }
 
             case SegmentKind.Song:
                 // 選曲は先行準備済み（OP 前に確定している）。
@@ -382,10 +433,15 @@ public sealed class BroadcastEngine
                 break;
 
             case SegmentKind.Ending:
+            {
+                // ED もその日のメインが読み、メインの口上を使う（tagline なし）。無ければ anchor → 先頭（W13.5 §7）。
+                var edSpiel = themes.Ending.Spiel(main.Id, new[] { anchor.Id }) ?? new DjSpiel("");
+                var edStaging = themes.Ending.Staging with { Tagline = edSpiel.Tagline };
                 await _themeSequencer
-                    .RunAsync(themes.Ending, Expand(themes.Greetings, themes.EndingAnnouncement, extraValues), anchor.SpeakerId, ct)
+                    .RunAsync(edStaging, Expand(themes.Greetings, edSpiel.Announcement, extraValues), main.SpeakerId, ct)
                     .ConfigureAwait(false);
                 break;
+            }
         }
     }
 

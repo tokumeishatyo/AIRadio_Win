@@ -52,6 +52,11 @@ public class BroadcastEngineTests
             new[] { "zundamon", "metan" }, "spotify:track:fallback", Volume: 100, PlaySeconds: 5),
     };
 
+    // 既存テストの安定化: 全曜日メイン＝zundamon（FakeClock の日付に依存せず OP/ED 読み手を固定）。
+    // 曜日替わりの検証は専用テスト（WeekdayMainTests 相当）で固定日付 + 個別 cast を使う。
+    private static readonly WeeklyCast AllZundamonMain = new(
+        Enum.GetValues<DayOfWeek>().ToDictionary(d => d, d => (IReadOnlyList<string>)new[] { "zundamon", "metan" }));
+
     private static ProgramBlueprint MakeBlueprint(int songPlaySeconds = 30, string? newsDjId = null) => new(
         Title: "ケイラボAIラジオ",
         AnchorDjId: "zundamon",
@@ -60,19 +65,27 @@ public class BroadcastEngineTests
         Song: new SongSegmentSpec(SongFallback, "幕開けの曲", 100, songPlaySeconds),
         TalkCornerId: "free_talk",
         LetterCornerId: "letter",
-        NewsDjId: newsDjId);
+        NewsDjId: newsDjId)
+    {
+        WeeklyCast = AllZundamonMain,
+    };
 
     private static ProgramPlan MakePlan(ProgramLength length, int songPlaySeconds = 30, string? newsDjId = null)
         => new(MakeBlueprint(songPlaySeconds, newsDjId), length);
 
+    // OP/ED は by_dj（W13.5）。既定はメイン zundamon の口上のみ（必要なテストは metan/tsumugi を足す）。
     private static BroadcastThemes MakeThemes(
         string openingAnnouncement = "オープニングです。{first_song}。",
-        Greetings? greetings = null) => new(
-        Opening: new ThemeConfig("OPタグ", OpTrack, IntroSeconds: 5, Volume: 100, DuckedVolume: 35, OutroSeconds: 10),
-        OpeningAnnouncement: openingAnnouncement,
+        Greetings? greetings = null,
+        IReadOnlyDictionary<string, DjSpiel>? openingByDj = null,
+        IReadOnlyDictionary<string, DjSpiel>? endingByDj = null) => new(
+        Opening: new ThemedSegment(
+            new ThemeConfig(null, OpTrack, IntroSeconds: 5, Volume: 100, DuckedVolume: 35, OutroSeconds: 10),
+            openingByDj ?? new Dictionary<string, DjSpiel> { ["zundamon"] = new(openingAnnouncement, "OPタグ") }),
         News: new ThemeConfig("ニュースです", NewsTrack, 5, 100, 35, 10),
-        Ending: new ThemeConfig(null, EdTrack, 5, 100, 35, 10),
-        EndingAnnouncement: "エンディングです。",
+        Ending: new ThemedSegment(
+            new ThemeConfig(null, EdTrack, 5, 100, 35, 10),
+            endingByDj ?? new Dictionary<string, DjSpiel> { ["zundamon"] = new("エンディングです。") }),
         Greetings: greetings ?? new Greetings());
 
     private sealed record Harness(
@@ -548,6 +561,118 @@ public class BroadcastEngineTests
         Assert.DoesNotContain(h.Events, e => e is BroadcastEvent.EndingRequested); // ガードで発火しない
         Assert.Equal(1, Plays(spotify).Count(u => u == EdTrack));                  // ED は 1 回だけ（二重なし）
         Assert.Equal(new BroadcastEvent.BroadcastFinished(), h.Events[^1]);
+    }
+
+    // --- W13.5: 曜日替わりメイン DJ（OP/ED はメインが読む）+ news 曜日非依存 + コーナー頭二層化 ---
+
+    private static WeeklyCast SingleDayCast(DateTimeOffset date, params string[] ids)
+        => new(new Dictionary<DayOfWeek, IReadOnlyList<string>> { [date.DayOfWeek] = ids });
+
+    [Fact]
+    public async Task Opening_ReadByDaysMain_WithMainSpiel()
+    {
+        var spotify = new FakeSpotifyController();
+        var date = new DateTimeOffset(2026, 6, 14, 12, 0, 0, TimeSpan.Zero);
+        var blueprint = MakeBlueprint() with { WeeklyCast = SingleDayCast(date, "metan", "zundamon") };
+        var plan = new ProgramPlan(blueprint, ProgramLength.FromCorners(1));
+        var themes = MakeThemes(openingByDj: new Dictionary<string, DjSpiel>
+        {
+            ["zundamon"] = new("ずんOP。{first_song}。", "ずんタグ"),
+            ["metan"] = new("めたんOP。{first_song}。", "めたんタグ"),
+        });
+        var h = BuildEngine(spotify, new FakeClock(date), timeZone: TimeZoneInfo.Utc);
+
+        await h.Engine.RunAsync(plan, themes, Corners, Djs);
+
+        // メイン metan(speaker 2) が metan の口上で OP を読む（zundamon の口上ではない）。
+        var spoken = h.Audio.Played.Select(w => Encoding.UTF8.GetString(w)).ToList();
+        Assert.Contains(spoken, s => s.StartsWith("2:") && s.Contains("めたんOP"));
+        Assert.DoesNotContain(spoken, s => s.Contains("ずんOP"));
+    }
+
+    [Fact]
+    public async Task Ending_ReadByDaysMain_WithMainSpiel()
+    {
+        var spotify = new FakeSpotifyController();
+        var date = new DateTimeOffset(2026, 6, 14, 12, 0, 0, TimeSpan.Zero);
+        var blueprint = MakeBlueprint() with { WeeklyCast = SingleDayCast(date, "metan", "zundamon") };
+        var plan = new ProgramPlan(blueprint, ProgramLength.FromCorners(1));
+        var themes = MakeThemes(endingByDj: new Dictionary<string, DjSpiel>
+        {
+            ["zundamon"] = new("ずんED。"),
+            ["metan"] = new("めたんED。"),
+        });
+        var h = BuildEngine(spotify, new FakeClock(date), timeZone: TimeZoneInfo.Utc);
+
+        await h.Engine.RunAsync(plan, themes, Corners, Djs);
+
+        // メイン metan(speaker 2) が metan の ED 口上で読む（zundamon の ED ではない）。
+        var spoken = h.Audio.Played.Select(w => Encoding.UTF8.GetString(w)).ToList();
+        Assert.Contains(spoken, s => s.StartsWith("2:") && s.Contains("めたんED"));
+        Assert.DoesNotContain(spoken, s => s.Contains("ずんED"));
+    }
+
+    [Fact]
+    public async Task News_ReadByFixedNewsDj_RegardlessOfDaysMain()
+    {
+        var spotify = new FakeSpotifyController();
+        var date = new DateTimeOffset(2026, 6, 14, 12, 0, 0, TimeSpan.Zero);
+        var blueprint = MakeBlueprint(newsDjId: "ryusei") with { WeeklyCast = SingleDayCast(date, "metan", "zundamon") };
+        var plan = new ProgramPlan(blueprint, ProgramLength.FromCorners(2));
+        var h = BuildEngine(spotify, new FakeClock(date), news: _ => Task.FromResult("ニュースだよ"), timeZone: TimeZoneInfo.Utc);
+
+        await h.Engine.RunAsync(plan, MakeThemes(), Corners, DjsWithNewsDj);
+
+        // メインが metan でも news は ryusei(13) が読む（曜日非依存）。
+        var spoken = h.Audio.Played.Select(w => Encoding.UTF8.GetString(w)).ToList();
+        Assert.Contains(spoken, s => s.StartsWith("13:") && s.Contains("ニュースだよ"));
+        Assert.DoesNotContain(spoken, s => s.StartsWith("2:") && s.Contains("ニュースだよ"));
+    }
+
+    [Fact]
+    public async Task Preflight_EmptyDayCast_FailsFast()
+    {
+        var spotify = new FakeSpotifyController();
+        var date = new DateTimeOffset(2026, 6, 14, 12, 0, 0, TimeSpan.Zero);
+        // その日の曜日に編成が無い（別の曜日のみ定義）→ 空 cast → fail-fast。
+        var weekly = SingleDayCast(date.AddDays(1), "zundamon");
+        var plan = new ProgramPlan(MakeBlueprint() with { WeeklyCast = weekly }, ProgramLength.FromCorners(1));
+        var h = BuildEngine(spotify, new FakeClock(date), timeZone: TimeZoneInfo.Utc);
+
+        await Assert.ThrowsAsync<ConfigException>(() => h.Engine.RunAsync(plan, MakeThemes(), Corners, Djs));
+        Assert.Empty(spotify.Events);
+    }
+
+    [Fact]
+    public async Task Preflight_UndefinedCastDj_FailsFast()
+    {
+        var spotify = new FakeSpotifyController();
+        var date = new DateTimeOffset(2026, 6, 14, 12, 0, 0, TimeSpan.Zero);
+        var plan = new ProgramPlan(MakeBlueprint() with { WeeklyCast = SingleDayCast(date, "ghost") }, ProgramLength.FromCorners(1));
+        var h = BuildEngine(spotify, new FakeClock(date), timeZone: TimeZoneInfo.Utc);
+
+        await Assert.ThrowsAsync<ConfigException>(() => h.Engine.RunAsync(plan, MakeThemes(), Corners, Djs));
+        Assert.Empty(spotify.Events);
+    }
+
+    [Fact]
+    public async Task FirstTalk_NoLeadIn_LaterTalk_SpeaksLeadIn()
+    {
+        // コーナー頭の二層化（W13.5 §3）: 冒頭トークはリード文なし（挨拶）、以降の同コーナーはリード文を読む。
+        var spotify = new FakeSpotifyController();
+        var corners = new[]
+        {
+            Corners[0] with { LeadIn = "リードイン本文。" }, // free_talk にリード文
+            Corners[1],                                       // letter（LeadIn なし）
+        };
+        var h = BuildEngine(spotify, new FakeClock());
+
+        await h.Engine.RunAsync(MakePlan(ProgramLength.FromCorners(2)), MakeThemes(), corners, Djs);
+
+        var spoken = h.Audio.Played.Select(w => Encoding.UTF8.GetString(w)).ToList();
+        // 2 本目の free_talk（非冒頭）はリード文を読む。冒頭トークは読まない → ちょうど 1 回、メイン(zundamon=3)。
+        Assert.Equal(1, spoken.Count(s => s.Contains("リードイン本文。")));
+        Assert.StartsWith("3:", spoken.First(s => s.Contains("リードイン本文。")));
     }
 
     // --- 失敗注入 / トレース / ルーティング用 fake（いずれも既存 interface の実装。新 interface を作らない）。 ---

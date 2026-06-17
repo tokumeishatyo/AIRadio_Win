@@ -151,9 +151,8 @@ public class ProgramThemesConfigTests
     [Fact]
     public void Program_IgnoresFutureSliceKeys()
     {
-        // weekly_cast / guest / artist_feature（W13.5/W14/W15）は v2 では無視され壊れない。
+        // guest / artist_feature（W14/W15）は v2 では無視され壊れない。
         const string yaml = MinimalProgram +
-            "  weekly_cast:\n    monday: [zundamon, metan]\n" +
             "  guest:\n    corner_id: guest_corner\n" +
             "  artist_feature:\n    corner_id: feature\n";
 
@@ -161,51 +160,118 @@ public class ProgramThemesConfigTests
         Assert.Equal("free_talk", b.TalkCornerId);   // 正常ロード（未知キーは無視）
     }
 
-    // --- themes.yaml ---
+    // --- program.yaml weekly_cast（W13.5） ---
 
     [Fact]
-    public void Themes_FromYaml_LoadsThemes_NormalizesUri_AndApplies()
+    public void Program_ParsesWeeklyCast()
+    {
+        var b = ProgramConfig.FromYaml(MinimalProgram +
+            "  weekly_cast:\n    monday: [zundamon, metan]\n    sunday: [zundamon, metan, tsumugi]\n");
+
+        Assert.Equal(new[] { "zundamon", "metan" }, b.WeeklyCast.Casts[DayOfWeek.Monday]);
+        Assert.Equal(new[] { "zundamon", "metan", "tsumugi" }, b.WeeklyCast.Casts[DayOfWeek.Sunday]);
+    }
+
+    [Fact]
+    public void Program_WeeklyCastOmitted_UsesStandard()
+    {
+        var b = ProgramConfig.FromYaml(MinimalProgram);   // weekly_cast 省略
+
+        Assert.Same(WeeklyCast.Standard, b.WeeklyCast);
+        Assert.Equal(3, b.WeeklyCast.Casts[DayOfWeek.Sunday].Count); // 日曜 3 人
+    }
+
+    [Fact]
+    public void Program_WeeklyCastInvalidDay_ThrowsMissingField()
+    {
+        var ex = Assert.Throws<ConfigException>(() => ProgramConfig.FromYaml(
+            MinimalProgram + "  weekly_cast:\n    funday: [zundamon]\n"));
+        Assert.Equal("E-CFG-MISSING-FIELD-001", ex.Code);
+    }
+
+    [Fact]
+    public void Program_WeeklyCastEmptyCast_ThrowsMissingField()
+    {
+        var ex = Assert.Throws<ConfigException>(() => ProgramConfig.FromYaml(
+            MinimalProgram + "  weekly_cast:\n    monday: []\n"));
+        Assert.Equal("E-CFG-MISSING-FIELD-001", ex.Code);
+    }
+
+    // --- themes.yaml（W13.5: OP/ED は by_dj、news は単一） ---
+
+    [Fact]
+    public void Themes_FromYaml_LoadsByDjThemes_NormalizesUri_AndApplies()
     {
         const string yaml =
             "opening:\n" +
             "  track_uri: \"https://open.spotify.com/track/ABC?si=x\"\n" +
-            "  tagline: \"OPタグ\"\n  announcement: \"OP原稿\"\n" +
             "  intro_seconds: 3\n  volume: 90\n  ducked_volume: 20\n  outro_seconds: 8\n" +
+            "  by_dj:\n" +
+            "    zundamon:\n      tagline: \"OPタグず\"\n      announcement: \"OP原稿ず\"\n" +
+            "    metan:\n      tagline: \"OPタグめ\"\n      announcement: \"OP原稿め\"\n" +
             "news:\n  track_uri: \"spotify:track:NEWS\"\n  tagline: \"ニュースです\"\n" +
-            "ending:\n  track_uri: \"DEF\"\n  announcement: \"ED原稿\"\n";
+            "ending:\n  track_uri: \"DEF\"\n" +
+            "  by_dj:\n    zundamon:\n      announcement: \"ED原稿ず\"\n";
 
         var t = ThemesConfig.FromYaml(yaml);
 
-        // OP: 共有 URL → spotify:track: に正規化。tagline / announcement / staging 反映。
-        Assert.Equal("spotify:track:ABC", t.Opening.TrackUri);
-        Assert.Equal("OPタグ", t.Opening.Tagline);
-        Assert.Equal("OP原稿", t.OpeningAnnouncement);
-        Assert.Equal(3, t.Opening.IntroSeconds);
-        Assert.Equal(90, t.Opening.Volume);
-        Assert.Equal(20, t.Opening.DuckedVolume);
-        Assert.Equal(8, t.Opening.OutroSeconds);
+        // OP staging: 共有 URL → 正規化。tagline は staging では持たない（per-DJ のため null）。
+        Assert.Equal("spotify:track:ABC", t.Opening.Staging.TrackUri);
+        Assert.Null(t.Opening.Staging.Tagline);
+        Assert.Equal(3, t.Opening.Staging.IntroSeconds);
+        Assert.Equal(90, t.Opening.Staging.Volume);
+        Assert.Equal(20, t.Opening.Staging.DuckedVolume);
+        Assert.Equal(8, t.Opening.Staging.OutroSeconds);
+        // OP by_dj: DJ 別 tagline / announcement。
+        Assert.Equal("OP原稿ず", t.Opening.ByDj["zundamon"].Announcement);
+        Assert.Equal("OPタグず", t.Opening.ByDj["zundamon"].Tagline);
+        Assert.Equal("OP原稿め", t.Opening.ByDj["metan"].Announcement);
 
-        // news: staging のみ。省略値は既定（intro 5 / volume 100 / ducked 35 / outro 10）。
+        // news: 単一（tagline 保持）。省略値は既定。
         Assert.Equal("spotify:track:NEWS", t.News.TrackUri);
         Assert.Equal("ニュースです", t.News.Tagline);
         Assert.Equal(5, t.News.IntroSeconds);
         Assert.Equal(100, t.News.Volume);
-        Assert.Equal(35, t.News.DuckedVolume);
-        Assert.Equal(10, t.News.OutroSeconds);
 
-        // ED: tagline なし（いきなり BGM）。裸 ID も正規化。
-        Assert.Null(t.Ending.Tagline);
-        Assert.Equal("spotify:track:DEF", t.Ending.TrackUri);
-        Assert.Equal("ED原稿", t.EndingAnnouncement);
+        // ED: by_dj（tagline なし＝null）。裸 ID も正規化。
+        Assert.Equal("spotify:track:DEF", t.Ending.Staging.TrackUri);
+        Assert.Equal("ED原稿ず", t.Ending.ByDj["zundamon"].Announcement);
+        Assert.Null(t.Ending.ByDj["zundamon"].Tagline);
     }
 
     [Fact]
     public void Themes_MissingTrackUri_ThrowsMissingField()
     {
         const string yaml =
-            "opening:\n  tagline: \"x\"\n" +
+            "opening:\n  by_dj:\n    zundamon:\n      announcement: \"x\"\n" +  // track_uri 欠落
             "news:\n  track_uri: \"spotify:track:N\"\n" +
-            "ending:\n  track_uri: \"spotify:track:E\"\n";
+            "ending:\n  track_uri: \"spotify:track:E\"\n  by_dj:\n    zundamon:\n      announcement: \"y\"\n";
+
+        var ex = Assert.Throws<ConfigException>(() => ThemesConfig.FromYaml(yaml));
+        Assert.Equal("E-CFG-MISSING-FIELD-001", ex.Code);
+    }
+
+    [Fact]
+    public void Themes_MissingByDj_ThrowsMissingField()
+    {
+        // OP に by_dj が無い → fail-fast（W13.5）。
+        const string yaml =
+            "opening:\n  track_uri: \"spotify:track:O\"\n" +
+            "news:\n  track_uri: \"spotify:track:N\"\n" +
+            "ending:\n  track_uri: \"spotify:track:E\"\n  by_dj:\n    zundamon:\n      announcement: \"y\"\n";
+
+        var ex = Assert.Throws<ConfigException>(() => ThemesConfig.FromYaml(yaml));
+        Assert.Equal("E-CFG-MISSING-FIELD-001", ex.Code);
+    }
+
+    [Fact]
+    public void Themes_ByDjMissingAnnouncement_ThrowsMissingField()
+    {
+        // by_dj の spiel に announcement が無い → fail-fast（W13.5）。
+        const string yaml =
+            "opening:\n  track_uri: \"spotify:track:O\"\n  by_dj:\n    zundamon:\n      tagline: \"t\"\n" +
+            "news:\n  track_uri: \"spotify:track:N\"\n" +
+            "ending:\n  track_uri: \"spotify:track:E\"\n  by_dj:\n    zundamon:\n      announcement: \"y\"\n";
 
         var ex = Assert.Throws<ConfigException>(() => ThemesConfig.FromYaml(yaml));
         Assert.Equal("E-CFG-MISSING-FIELD-001", ex.Code);
@@ -216,8 +282,8 @@ public class ProgramThemesConfigTests
     {
         // news セクション欠落 → fail-fast。
         const string yaml =
-            "opening:\n  track_uri: \"spotify:track:O\"\n" +
-            "ending:\n  track_uri: \"spotify:track:E\"\n";
+            "opening:\n  track_uri: \"spotify:track:O\"\n  by_dj:\n    zundamon:\n      announcement: \"a\"\n" +
+            "ending:\n  track_uri: \"spotify:track:E\"\n  by_dj:\n    zundamon:\n      announcement: \"b\"\n";
 
         Assert.Throws<ConfigException>(() => ThemesConfig.FromYaml(yaml));
     }
@@ -225,9 +291,9 @@ public class ProgramThemesConfigTests
     // --- themes.yaml greetings（W8） ---
 
     private const string MinimalThemes =
-        "opening:\n  track_uri: \"spotify:track:O\"\n  announcement: \"OP\"\n" +
+        "opening:\n  track_uri: \"spotify:track:O\"\n  by_dj:\n    zundamon:\n      announcement: \"OP\"\n" +
         "news:\n  track_uri: \"spotify:track:N\"\n" +
-        "ending:\n  track_uri: \"spotify:track:E\"\n  announcement: \"ED\"\n";
+        "ending:\n  track_uri: \"spotify:track:E\"\n  by_dj:\n    zundamon:\n      announcement: \"ED\"\n";
 
     [Fact]
     public void Themes_LoadsGreetings_WhenPresent()

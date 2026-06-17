@@ -12,6 +12,9 @@ public abstract record CornerEvent
 
     public sealed record ScriptReady(int LineCount, int TotalCharacters) : CornerEvent;
 
+    /// <summary>時報リード文（発話直前に時刻展開した実テキスト。W13.5 §3）。</summary>
+    public sealed record LeadIn(string Text) : CornerEvent;
+
     public sealed record Line(DialogueLine DialogueLine) : CornerEvent;
 
     public sealed record SongStarted(TrackInfo Track) : CornerEvent;
@@ -20,12 +23,17 @@ public abstract record CornerEvent
 }
 
 /// <summary>準備済みコーナー（LLM + TTS 処理の成果物。S10: 先行準備で生成し、本番で消費する）。</summary>
+/// <param name="CastDjIds">実際に使った出演者（順序付き・先頭＝メイン。run で台本行→話者を一貫解決するため保持）。</param>
+/// <param name="LeadIn">本編前に読む時報リード文テンプレート（時刻プレースホルダ含む。発話直前に展開。null/空＝頭出しなし。W13.5）。</param>
+/// <param name="LeadInSpeakerId">時報リード文の読み手（その日のメイン）の speaker id（W13.5）。</param>
 public sealed record PreparedCorner(
     CornerTemplate Corner,
     TrackInfo Song,
     DialogueScript Script,
     IReadOnlyList<byte[]> LineAudio,
-    IReadOnlyList<string> CastDjIds);
+    IReadOnlyList<string> CastDjIds,
+    string? LeadIn = null,
+    int LeadInSpeakerId = 0);
 
 /// <summary>
 /// コーナー 1 本の進行（W6: free_talk）。Mac 版 `CornerEngine` の移植（letter/guest/artist_feature・テーマプール・
@@ -77,13 +85,16 @@ public sealed class CornerEngine
     /// <summary>準備 + 本番を続けて実行（単発デモ用）。</summary>
     public async Task RunAsync(CornerTemplate corner, IReadOnlyList<DjProfile> djs, CancellationToken ct = default)
     {
-        var prepared = await PrepareAsync(corner, djs, ct).ConfigureAwait(false);
+        var prepared = await PrepareAsync(corner, djs, ct: ct).ConfigureAwait(false);
         await RunAsync(prepared, djs, ct).ConfigureAwait(false);
     }
 
-    /// <summary>準備（LLM 処理のみ。音を出さないため失敗時の pause も不要）。</summary>
+    /// <summary>
+    /// 準備（LLM 処理のみ。音を出さないため失敗時の pause も不要）。出演者は <paramref name="context"/> の
+    /// CastDjIds（その日の編成・先頭＝メイン）で上書き、冒頭は挨拶、他は時報リード文（W13.5 §3）。
+    /// </summary>
     public async Task<PreparedCorner> PrepareAsync(
-        CornerTemplate corner, IReadOnlyList<DjProfile> djs, CancellationToken ct = default)
+        CornerTemplate corner, IReadOnlyList<DjProfile> djs, CornerContext? context = null, CancellationToken ct = default)
     {
         if (corner.Format is not (CornerFormat.FreeTalk or CornerFormat.Letter))
         {
@@ -91,7 +102,10 @@ public sealed class CornerEngine
             throw ConfigException.MissingField($"{corner.Format} は CornerEngine では未対応（free_talk / letter のみ）");
         }
 
-        var cast = ResolveCast(corner.DjIds, djs);
+        context ??= new CornerContext();
+        // その日の編成（先頭＝メイン）で cast を解決。空/null なら corner 定義の DjIds（W13.5）。
+        var castIds = context.CastDjIds is { Count: > 0 } ids ? ids : corner.DjIds;
+        var cast = ResolveCast(castIds, djs);
         var theme = SelectTheme(corner);
         _onEvent?.Invoke(new CornerEvent.ThemeSelected(theme));
         var dateContext = SeasonPhrases.DateContext(_clock.Now, _timeZone);
@@ -120,7 +134,8 @@ public sealed class CornerEngine
         _onEvent?.Invoke(new CornerEvent.SongPicked(song));
 
         var script = await generator.GenerateAsync(
-            corner, cast, song, theme: theme, dateContext: dateContext, letter: letter, ct: ct).ConfigureAwait(false);
+            corner, cast, song, theme: theme, dateContext: dateContext, letter: letter,
+            greeting: context.Greeting, ct: ct).ConfigureAwait(false);
         _onEvent?.Invoke(new CornerEvent.ScriptReady(script.Lines.Count, script.TotalCharacters));
 
         // 全行を事前合成（本番の TTS 待ちをゼロに。準備は OP・冒頭曲の再生中に進む想定）。
@@ -130,7 +145,10 @@ public sealed class CornerEngine
             lineAudio.Add(await _tts.SynthesizeAsync(line.Text, SpeakerIdFor(line, cast), ct).ConfigureAwait(false));
         }
 
-        return new PreparedCorner(corner, song, script, lineAudio, corner.DjIds);
+        // 時報リード文は事前合成しない（時刻が再生時点でずれるため）。テンプレートのまま保持し run で発話直前展開（W13.5 §3）。
+        var leadIn = string.IsNullOrEmpty(context.LeadIn) ? null : context.LeadIn;
+        return new PreparedCorner(
+            corner, song, script, lineAudio, castIds, LeadIn: leadIn, LeadInSpeakerId: cast[0].SpeakerId);
     }
 
     /// <summary>本番（発話 + 一曲。正常・例外・キャンセルいずれも最後は必ず pause）。</summary>
@@ -153,6 +171,24 @@ public sealed class CornerEngine
 
     private async Task PerformAsync(PreparedCorner prepared, IReadOnlyList<DjProfile> cast, CancellationToken ct)
     {
+        // 0. 時報リード文（あれば）。発話直前に時刻を展開し、その場で合成＝再生時点で正確（W13.5 §3）。
+        //    一過性のリード文失敗はスキップして本編へ（fail-tolerant）。キャンセルは握り潰さず伝播（§3-1）。
+        if (!string.IsNullOrEmpty(prepared.LeadIn))
+        {
+            var values = TimePhrases.Values(_clock.Now, null, _timeZone);
+            var text = TemplateExpander.Expand(prepared.LeadIn, values);
+            _onEvent?.Invoke(new CornerEvent.LeadIn(text));
+            try
+            {
+                var wav = await _tts.SynthesizeAsync(text, prepared.LeadInSpeakerId, ct).ConfigureAwait(false);
+                await _audio.PlayAsync(wav, ct).ConfigureAwait(false);
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException && !ct.IsCancellationRequested)
+            {
+                // 一過性のリード文失敗はスキップして本編へ（リード文は付加要素）。
+            }
+        }
+
         // 1. 発話
         await SpeakAsync(prepared, cast, ct).ConfigureAwait(false);
 

@@ -1,10 +1,10 @@
-# OP / ニュース / ED が共有する統一テーマ/BGM 演出（W7）。
+# OP / ニュース / ED が共有する統一テーマ/BGM 演出。
 # track_uri は BGM に使う Spotify トラック（共有 URL / spotify:track: / 裸 ID いずれも可、自動正規化）。
 # 演出: (tagline) → BGM フル音量 intro_seconds → ducked_volume へ → 発話 →
 #       曲の「残り outro_seconds 秒」へシーク → フル音量へ戻す → 曲の終わりで停止。
-# W7 は anchor（program.yaml の anchor_dj_id = ずんだもん）が OP/news/ED を読む単一・フラット形。
-# 曜日替わりメイン DJ の by_dj は W13.5。{greeting}/時刻プレースホルダは W8 で導入済み。
-# {first_song} は OP 末尾の冒頭曲の曲振り（発話直前に展開、曲名不明時は「本日の一曲」）。
+# W13.5: OP / ED は曜日替わりメイン DJ が読むため、口上（tagline / announcement）を by_dj で DJ 別に持つ。
+#        BGM 演出（track_uri / intro / volume / ducked / outro）は共有。news は単一（読み手は龍星固定）。
+# {greeting}/時刻プレースホルダは発話直前に展開（w8 §3）。{first_song} は冒頭曲の曲振り（曲名不明時は「本日の一曲」）。
 
 # 時間帯ごとの挨拶（{greeting} の値。境界はコード側: 朝5-11時/昼12-16時/夜17-4時）。
 greetings:
@@ -12,7 +12,7 @@ greetings:
   afternoon: "こんにちは"
   evening: "こんばんは"
 
-# announcement では時刻プレースホルダが使える（発話直前に展開、仕様 w8 §3）:
+# announcement の時刻プレースホルダ（発話直前展開、仕様 w8 §3）:
 #   {greeting} 時間帯挨拶 / {month}月 {day}日 / {ampm}{hour}時 = 午前/午後+NHK式12時間 /
 #   {hour12}時{minute}分 = 午前午後なしの12時間表記
 opening:
@@ -21,10 +21,18 @@ opening:
   volume: 100
   ducked_volume: 35
   outro_seconds: 10
-  tagline: "ずんだもんの ケイラボAIラジオ"
-  announcement: "{greeting}。{month}月{day}日、{ampm}{hour}時になりました。ケイラボAIラジオの時間なのだ。お送りするのはずんだもんなのだ。本日もリスナーの皆さんと、ゆったりした時間を過ごしていきたいと思うのだ。なお、本番組の音声合成にはVOICEVOXを使用しているのだ。それでは早速、1曲目を聴いてもらうのだ。{first_song}。"
+  by_dj:
+    zundamon:
+      tagline: "ずんだもんの ケイラボAIラジオ"
+      announcement: "{greeting}。{month}月{day}日、{ampm}{hour}時になりました。ケイラボAIラジオの時間なのだ。お送りするのはずんだもんなのだ。本日もリスナーの皆さんと、ゆったりした時間を過ごしていきたいと思うのだ。なお、本番組の音声合成にはVOICEVOXを使用しているのだ。それでは早速、1曲目を聴いてもらうのだ。{first_song}。"
+    metan:
+      tagline: "四国めたんの ケイラボAIラジオ"
+      announcement: "{greeting}。{month}月{day}日、{ampm}{hour}時になりましたわ。ケイラボAIラジオのお時間ですわ。お送りするのは四国めたんですわ。本日もリスナーの皆さまと、ゆったりとした時間を過ごしてまいりますわ。なお、本番組の音声合成にはVOICEVOXを使用しておりますわ。それでは早速、1曲目をお聴きくださいませ。{first_song}。"
+    tsumugi:
+      tagline: "春日部つむぎの ケイラボAIラジオ"
+      announcement: "{greeting}ー。{month}月{day}日、{ampm}{hour}時になりましたー。ケイラボAIラジオのお時間ですー。お送りするのは、あーし、春日部つむぎでーす。今日もリスナーのみんなと、まったり過ごしていきたいと思いますー。あ、この番組の音声合成にはVOICEVOXを使ってるんですよー。それでは早速、1曲目を聴いてくださーい。{first_song}。"
 
-# news は staging（+tagline）のみ。announcement は実行時に取得したニュース・天気原稿で差し替える。
+# news は staging（+tagline）のみ。announcement は実行時に取得したニュース・天気原稿で差し替える（読み手は龍星固定）。
 news:
   track_uri: "spotify:track:7ovUcF5uHTBRzUpB6ZOmvt"
   intro_seconds: 5
@@ -33,11 +41,17 @@ news:
   outro_seconds: 10
   tagline: "ニュースと天気予報です"
 
-# ED は tagline なし（いきなり BGM）。
+# ED は tagline なし（いきなり BGM）。口上は by_dj（その日のメインが読む）。
 ending:
   track_uri: "spotify:track:5gf9qeUJUHvhp1TkHUJ2sR"
   intro_seconds: 5
   volume: 100
   ducked_volume: 35
   outro_seconds: 10
-  announcement: "本日も最後までお聴きいただき、ありがとうございましたなのだ。また次回お会いしましょう。それでは、おやすみなさいなのだ。"
+  by_dj:
+    zundamon:
+      announcement: "本日も最後までお聴きいただき、ありがとうございましたなのだ。また次回お会いしましょう。それでは、おやすみなさいなのだ。"
+    metan:
+      announcement: "本日も最後までお聴きいただき、ありがとうございましたわ。また次回お会いしましょう。それでは、ごきげんよう。"
+    tsumugi:
+      announcement: "本日も最後まで聴いてくれて、ありがとうございましたー。また次回、お会いしましょうー。それでは、あーしたちと、またねー。"

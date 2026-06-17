@@ -56,9 +56,9 @@ public class DjsCornersConfigTests
     }
 
     [Fact]
-    public void Corners_LoadsThemePool_AndMapsLetterFormat()
+    public void Corners_LoadsThemePool_LeadIn_AndMapsLetterFormat()
     {
-        // themes（W12）を ThemePool に読み込む。lead_in（W13.5）は読み飛ばす。format=letter は enum へマップ。
+        // themes（W12）を ThemePool に、lead_in（W13.5）を LeadIn に読み込む。format=letter は enum へマップ。
         const string yaml =
             "corners:\n" +
             "  - id: letter\n    title: \"お便り\"\n    format: letter\n    theme: \"x\"\n" +
@@ -69,6 +69,20 @@ public class DjsCornersConfigTests
 
         Assert.Equal(CornerFormat.Letter, corners[0].Format);
         Assert.Equal(new[] { "a", "b", "c" }, corners[0].ThemePool); // themes → ThemePool
+        Assert.Equal("{hour}時です", corners[0].LeadIn);              // lead_in → LeadIn（W13.5）
+    }
+
+    [Fact]
+    public void Corners_NoLeadIn_LeadInNull()
+    {
+        // lead_in 未指定 → LeadIn は null（既定。Mac の "" とは異なる Win の意図的差異）。
+        const string yaml =
+            "corners:\n  - id: free_talk\n    title: \"フリートーク\"\n    theme: \"音楽\"\n" +
+            "    dj_ids: [zundamon]\n    fallback_track_uri: \"spotify:track:fb\"\n";
+
+        var corners = CornersConfig.FromYaml(yaml);
+
+        Assert.Null(corners[0].LeadIn);
     }
 
     [Fact]

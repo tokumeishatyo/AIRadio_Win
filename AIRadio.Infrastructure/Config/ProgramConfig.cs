@@ -46,7 +46,47 @@ public static class ProgramConfig
                 PlaySeconds: songDto.PlaySeconds ?? 0),
             TalkCornerId: program.Talk.CornerId,
             LetterCornerId: program.Letter.CornerId,
-            NewsDjId: program.News?.DjId);
+            NewsDjId: program.News?.DjId)
+        {
+            WeeklyCast = ParseWeeklyCast(program.WeeklyCast),
+        };
+    }
+
+    private static readonly IReadOnlyDictionary<string, DayOfWeek> Weekdays = new Dictionary<string, DayOfWeek>
+    {
+        ["sunday"] = DayOfWeek.Sunday,
+        ["monday"] = DayOfWeek.Monday,
+        ["tuesday"] = DayOfWeek.Tuesday,
+        ["wednesday"] = DayOfWeek.Wednesday,
+        ["thursday"] = DayOfWeek.Thursday,
+        ["friday"] = DayOfWeek.Friday,
+        ["saturday"] = DayOfWeek.Saturday,
+    };
+
+    /// <summary>
+    /// <c>weekly_cast</c>（曜日名→順序付き DJ）を <see cref="WeeklyCast"/> に。省略（null/空）時は <see cref="WeeklyCast.Standard"/>。
+    /// 不正な曜日名・空編成は fail-fast（Mac <c>parseWeeklyCast</c> 一致）。曜日名は小文字化して照合する。
+    /// </summary>
+    private static WeeklyCast ParseWeeklyCast(Dictionary<string, List<string>>? raw)
+    {
+        if (raw is null || raw.Count == 0)
+        {
+            return WeeklyCast.Standard;
+        }
+        var casts = new Dictionary<DayOfWeek, IReadOnlyList<string>>();
+        foreach (var (day, ids) in raw)
+        {
+            if (!Weekdays.TryGetValue(day.ToLowerInvariant(), out var weekday))
+            {
+                throw ConfigException.MissingField($"program.weekly_cast の曜日名が不正: {day}");
+            }
+            if (ids is null || ids.Count == 0)
+            {
+                throw ConfigException.MissingField($"program.weekly_cast.{day} の編成が空です");
+            }
+            casts[weekday] = ids;
+        }
+        return new WeeklyCast(casts);
     }
 
     public static ProgramBlueprint LoadFile(string path) => FromYaml(File.ReadAllText(path));
@@ -89,6 +129,7 @@ public static class ProgramConfig
         public TalkDto? Talk { get; set; }
         public TalkDto? Letter { get; set; }
         public NewsDto? News { get; set; }
+        public Dictionary<string, List<string>>? WeeklyCast { get; set; }
     }
 
     public sealed class OpeningDto
