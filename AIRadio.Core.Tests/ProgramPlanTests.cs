@@ -38,6 +38,7 @@ public class ProgramPlanTests
     private static (SegmentKind, string?) Tl => (SegmentKind.Talk, "letter");
     private static (SegmentKind, string?) News => (SegmentKind.News, null);
     private static (SegmentKind, string?) Ed => (SegmentKind.Ending, null);
+    private static (SegmentKind, string?) Tg => (SegmentKind.Talk, "guest");
 
     [Fact]
     public void N1_Produces_OpSongTalkEnding()
@@ -126,6 +127,63 @@ public class ProgramPlanTests
         var plan = new ProgramPlan(Blueprint(), ProgramLength.FromCorners(2));
         Assert.Equal("spotify:track:X", plan.Segment(1)!.Song!.FallbackTrackUri);
         Assert.Equal("ryusei", plan.Segment(5)!.DjId);          // news の専任読み手
+    }
+
+    // --- W14: ゲスト挿入（最初の news 直後に 1 回） ---
+
+    private static ProgramBlueprint GuestBlueprint() => Blueprint() with { GuestCornerId = "guest" };
+
+    [Fact]
+    public void Guest_N2_InsertedAfterFirstNews()
+    {
+        var plan = new ProgramPlan(GuestBlueprint(), ProgramLength.FromCorners(2));
+
+        Assert.True(plan.IncludesGuestCorner);
+        Assert.Equal(new[] { Op, Song, Tf, Tf, Tl, News, Tg, Ed }, Enumerate(plan, 20));
+        Assert.Equal(8, plan.TotalSegmentCount);
+    }
+
+    [Fact]
+    public void Guest_N4_OnlyAfterFirstNews_NotSecond()
+    {
+        var plan = new ProgramPlan(GuestBlueprint(), ProgramLength.FromCorners(4));
+
+        Assert.Equal(
+            new[] { Op, Song, Tf, Tf, Tl, News, Tg, Tf, Tf, Tl, News, Ed }, Enumerate(plan, 30));
+        Assert.Equal(12, plan.TotalSegmentCount);
+        Assert.Equal(1, Enumerate(plan, 30).Count(s => s == Tg)); // ゲストは 1 回だけ（2 回目 news 後はなし）
+        Assert.Equal(4, Enumerate(plan, 30).Count(s => s == Tf)); // free_talk は N=4 のまま（ゲストは N に数えない）
+    }
+
+    [Fact]
+    public void Guest_N1_NoGuest_BelowMinimum()
+    {
+        var plan = new ProgramPlan(GuestBlueprint(), ProgramLength.FromCorners(1));
+
+        Assert.False(plan.IncludesGuestCorner);
+        Assert.Equal(new[] { Op, Song, Tf, Ed }, Enumerate(plan, 20)); // news が無いのでゲストもなし
+        Assert.Equal(4, plan.TotalSegmentCount);
+    }
+
+    [Fact]
+    public void Guest_Endless_InsertedOnce()
+    {
+        var plan = new ProgramPlan(GuestBlueprint(), ProgramLength.Endless);
+
+        Assert.True(plan.IncludesGuestCorner);
+        Assert.Equal(
+            new[] { Op, Song, Tf, Tf, Tl, News, Tg, Tf, Tf, Tl, News, Tf }, Enumerate(plan, 12));
+        Assert.Equal(1, Enumerate(plan, 200).Count(s => s == Tg)); // 無限ループでもゲストは 1 回
+    }
+
+    [Fact]
+    public void Guest_NullCornerId_PlanUnchanged()
+    {
+        var plan = new ProgramPlan(Blueprint(), ProgramLength.FromCorners(2)); // GuestCornerId なし
+
+        Assert.False(plan.IncludesGuestCorner);
+        Assert.Equal(new[] { Op, Song, Tf, Tf, Tl, News, Ed }, Enumerate(plan, 20)); // W13 の N=2 と同じ
+        Assert.Equal(7, plan.TotalSegmentCount);
     }
 }
 

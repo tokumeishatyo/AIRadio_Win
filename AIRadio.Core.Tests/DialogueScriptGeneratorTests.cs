@@ -160,4 +160,37 @@ public class DialogueScriptGeneratorTests
         Assert.Contains("番組全体を締めくくる言い方", request.Prompt); // 終了風抑止句を維持
         Assert.DoesNotContain("番組の最初のコーナー", request.Prompt);
     }
+
+    [Fact]
+    public void MakeRequest_WithGuest_AddsExpertFramingConstraints_AndGuestPersona()
+    {
+        // ゲストコーナー（W14）: 冒頭挨拶・専門家・お礼の制約 + ゲスト persona が # 出演DJ に入る。
+        var corner = new CornerTemplate(
+            "guest", "ゲストコーナー", "音楽", CornerFormat.Guest,
+            new[] { "zundamon", "metan" }, "spotify:track:fb");
+        var song = new TrackInfo("spotify:track:x", "アイドル", "YOASOBI");
+        var guest = new DjProfile("sora", "九州そら", 16, "おっとり穏やか");
+        var castWithGuest = new[] { Djs[0], Djs[1], guest }; // CornerEngine と同じく cast 末尾にゲスト
+
+        var request = DialogueScriptGenerator.MakeRequest(corner, castWithGuest, song, theme: "音楽", guest: guest);
+
+        Assert.Contains("ゲスト「九州そら」が冒頭で軽く挨拶", request.Prompt);
+        Assert.Contains("ゲスト「九州そら」は「音楽」に詳しい専門家", request.Prompt);
+        Assert.Contains("メインがゲスト「九州そら」へお礼", request.Prompt);
+        Assert.Contains("おっとり穏やか", request.System!); // ゲスト persona
+    }
+
+    [Fact]
+    public void MakeRequest_WithoutGuest_NoGuestFraming()
+    {
+        var corner = new CornerTemplate(
+            "free_talk", "フリートーク", "音楽", CornerFormat.FreeTalk,
+            new[] { "zundamon", "metan" }, "spotify:track:fb");
+        var song = new TrackInfo("spotify:track:x", "アイドル", "YOASOBI");
+
+        var request = DialogueScriptGenerator.MakeRequest(corner, Djs, song, theme: "音楽"); // guest なし
+
+        Assert.DoesNotContain("詳しい専門家", request.Prompt);
+        Assert.DoesNotContain("ゲスト", request.Prompt);
+    }
 }

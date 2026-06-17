@@ -104,7 +104,8 @@ public class BroadcastEngineTests
         Func<CancellationToken, Task<string>>? news = null,
         TimeZoneInfo? timeZone = null,
         IReadOnlyList<DjProfile>? djs = null,
-        Action<BroadcastEvent>? onEvent = null)
+        Action<BroadcastEvent>? onEvent = null,
+        Func<int, int>? randomIndex = null)
     {
         var events = new List<BroadcastEvent>();
         var audio = new SpyAudioPlayer();
@@ -128,7 +129,7 @@ public class BroadcastEngineTests
         var engine = new BroadcastEngine(
             themeSequencer, corner, firstSongPicker, countedNews, spotify, clock,
             e => { lock (events) { events.Add(e); } onEvent?.Invoke(e); },
-            timeZone);
+            timeZone, randomIndex);
 
         return new Harness(engine, events, audio, () => { lock (newsCalls) { return newsCalls[0]; } });
     }
@@ -673,6 +674,102 @@ public class BroadcastEngineTests
         // 2 本目の free_talk（非冒頭）はリード文を読む。冒頭トークは読まない → ちょうど 1 回、メイン(zundamon=3)。
         Assert.Equal(1, spoken.Count(s => s.Contains("リードイン本文。")));
         Assert.StartsWith("3:", spoken.First(s => s.Contains("リードイン本文。")));
+    }
+
+    // --- W14: ゲストコーナー（最初の news 直後に 1 回・プールから選定・fail-fast） ---
+
+    private static readonly DjProfile Sora = new("sora", "九州そら", 16, "おっとり穏やか");
+
+    // 1 要素プールは Random.Shared.Next(1)==0 で決定論的に選定されるため randomIndex 注入不要。
+    private static IReadOnlyList<CornerTemplate> CornersWithGuest() => new[]
+    {
+        Corners[0], // free_talk
+        Corners[1], // letter
+        new CornerTemplate(
+            "guest", "ゲストコーナー", "音楽", CornerFormat.Guest,
+            new[] { "zundamon", "metan" }, "spotify:track:fallback", Volume: 100, PlaySeconds: 5,
+            LeadIn: "本日のゲストは{guest}さんです。"),
+    };
+
+    [Fact]
+    public async Task Guest_SelectedFromPool_RunsAfterFirstNews_LeadInNamesGuest()
+    {
+        var spotify = new FakeSpotifyController();
+        var plan = new ProgramPlan(MakeBlueprint() with { GuestCornerId = "guest" }, ProgramLength.FromCorners(2));
+        var h = BuildEngine(spotify, new FakeClock());
+
+        await h.Engine.RunAsync(plan, MakeThemes(), CornersWithGuest(), Djs, guests: new[] { Sora });
+
+        // 選定ゲスト（sora）が lead_in に埋まり、メイン(zundamon=3) が読む → 選定 + {guest} 置換 + 配置の end-to-end。
+        var spoken = h.Audio.Played.Select(w => Encoding.UTF8.GetString(w)).ToList();
+        Assert.Contains(spoken, s => s.StartsWith("3:") && s.Contains("本日のゲストは九州そらさんです。"));
+        Assert.Equal(new BroadcastEvent.BroadcastFinished(), h.Events[^1]);
+    }
+
+    [Fact]
+    public async Task Guest_EmptyPool_FailsFast_WhenGuestCornerActive()
+    {
+        var spotify = new FakeSpotifyController();
+        var plan = new ProgramPlan(MakeBlueprint() with { GuestCornerId = "guest" }, ProgramLength.FromCorners(2));
+        var h = BuildEngine(spotify, new FakeClock());
+
+        await Assert.ThrowsAsync<ConfigException>(
+            () => h.Engine.RunAsync(plan, MakeThemes(), CornersWithGuest(), Djs, guests: Array.Empty<DjProfile>()));
+        Assert.Empty(spotify.Events);
+    }
+
+    [Fact]
+    public async Task Guest_CollisionWithRegular_FailsFast()
+    {
+        var spotify = new FakeSpotifyController();
+        var plan = new ProgramPlan(MakeBlueprint() with { GuestCornerId = "guest" }, ProgramLength.FromCorners(2));
+        var h = BuildEngine(spotify, new FakeClock());
+        var clash = new[] { new DjProfile("zundamon", "別ずん", 99, "x") }; // レギュラーと id 衝突
+
+        await Assert.ThrowsAsync<ConfigException>(
+            () => h.Engine.RunAsync(plan, MakeThemes(), CornersWithGuest(), Djs, guests: clash));
+        Assert.Empty(spotify.Events);
+    }
+
+    [Fact]
+    public async Task Guest_TemplateAbsent_FailsFast()
+    {
+        var spotify = new FakeSpotifyController();
+        var plan = new ProgramPlan(MakeBlueprint() with { GuestCornerId = "guest" }, ProgramLength.FromCorners(2));
+        var h = BuildEngine(spotify, new FakeClock());
+
+        // corners に guest コーナー template が無い → fail-fast。
+        await Assert.ThrowsAsync<ConfigException>(
+            () => h.Engine.RunAsync(plan, MakeThemes(), Corners, Djs, guests: new[] { Sora }));
+        Assert.Empty(spotify.Events);
+    }
+
+    [Fact]
+    public async Task Guest_NotIncludedWhenN1_NoFailFastOnEmptyPool()
+    {
+        // N=1（news なし → IncludesGuestCorner false）。プール空でも検証せず正常完走（誤って中止しない）。
+        var spotify = new FakeSpotifyController();
+        var plan = new ProgramPlan(MakeBlueprint() with { GuestCornerId = "guest" }, ProgramLength.FromCorners(1));
+        var h = BuildEngine(spotify, new FakeClock());
+
+        await h.Engine.RunAsync(plan, MakeThemes(), CornersWithGuest(), Djs, guests: Array.Empty<DjProfile>());
+        Assert.Equal(new BroadcastEvent.BroadcastFinished(), h.Events[^1]);
+    }
+
+    [Fact]
+    public async Task Guest_SelectedByInjectedRandomIndex_FromMultiElementPool()
+    {
+        // 2 要素プール + randomIndex: _ => 1 で index 1（冥鳴ひまり）を選定（Mac パリティ。1 要素プールの偶発グリーンに非依存）。
+        var spotify = new FakeSpotifyController();
+        var plan = new ProgramPlan(MakeBlueprint() with { GuestCornerId = "guest" }, ProgramLength.FromCorners(2));
+        var himari = new DjProfile("himari", "冥鳴ひまり", 14, "落ち着いた知的な女性");
+        var h = BuildEngine(spotify, new FakeClock(), randomIndex: _ => 1);
+
+        await h.Engine.RunAsync(plan, MakeThemes(), CornersWithGuest(), Djs, guests: new[] { Sora, himari });
+
+        var spoken = h.Audio.Played.Select(w => Encoding.UTF8.GetString(w)).ToList();
+        Assert.Contains(spoken, s => s.Contains("本日のゲストは冥鳴ひまりさんです。")); // index 1
+        Assert.DoesNotContain(spoken, s => s.Contains("九州そら"));                     // index 0 ではない
     }
 
     // --- 失敗注入 / トレース / ルーティング用 fake（いずれも既存 interface の実装。新 interface を作らない）。 ---

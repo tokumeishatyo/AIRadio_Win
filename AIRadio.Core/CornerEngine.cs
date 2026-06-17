@@ -8,6 +8,9 @@ public abstract record CornerEvent
     /// <summary>お便りコーナー（W12）で架空リスナーのお便りを生成した（ラジオネーム）。</summary>
     public sealed record LetterReady(string RadioName) : CornerEvent;
 
+    /// <summary>ゲストコーナー（W14）で迎えるゲストが確定した（ゲスト名）。</summary>
+    public sealed record GuestReady(string Name) : CornerEvent;
+
     public sealed record SongPicked(TrackInfo Track) : CornerEvent;
 
     public sealed record ScriptReady(int LineCount, int TotalCharacters) : CornerEvent;
@@ -26,6 +29,7 @@ public abstract record CornerEvent
 /// <param name="CastDjIds">実際に使った出演者（順序付き・先頭＝メイン。run で台本行→話者を一貫解決するため保持）。</param>
 /// <param name="LeadIn">本編前に読む時報リード文テンプレート（時刻プレースホルダ含む。発話直前に展開。null/空＝頭出しなし。W13.5）。</param>
 /// <param name="LeadInSpeakerId">時報リード文の読み手（その日のメイン）の speaker id（W13.5）。</param>
+/// <param name="Guest">ゲストコーナー（W14）で迎えたゲスト（cast 末尾の出演者。<see cref="CastDjIds"/> には含めず別持ち＝djs に居ないため）。</param>
 public sealed record PreparedCorner(
     CornerTemplate Corner,
     TrackInfo Song,
@@ -33,7 +37,8 @@ public sealed record PreparedCorner(
     IReadOnlyList<byte[]> LineAudio,
     IReadOnlyList<string> CastDjIds,
     string? LeadIn = null,
-    int LeadInSpeakerId = 0);
+    int LeadInSpeakerId = 0,
+    DjProfile? Guest = null);
 
 /// <summary>
 /// コーナー 1 本の進行（W6: free_talk）。Mac 版 `CornerEngine` の移植（letter/guest/artist_feature・テーマプール・
@@ -96,16 +101,23 @@ public sealed class CornerEngine
     public async Task<PreparedCorner> PrepareAsync(
         CornerTemplate corner, IReadOnlyList<DjProfile> djs, CornerContext? context = null, CancellationToken ct = default)
     {
-        if (corner.Format is not (CornerFormat.FreeTalk or CornerFormat.Letter))
+        if (corner.Format is not (CornerFormat.FreeTalk or CornerFormat.Letter or CornerFormat.Guest))
         {
-            // guest（W14）/ artist_feature（W15）は本スライス未対応。
-            throw ConfigException.MissingField($"{corner.Format} は CornerEngine では未対応（free_talk / letter のみ）");
+            // artist_feature（W15）は専用エンジンで実行する（CornerEngine には来ない想定）。
+            throw ConfigException.MissingField($"{corner.Format} は CornerEngine では未対応（free_talk / letter / guest のみ）");
         }
 
         context ??= new CornerContext();
         // その日の編成（先頭＝メイン）で cast を解決。空/null なら corner 定義の DjIds（W13.5）。
         var castIds = context.CastDjIds is { Count: > 0 } ids ? ids : corner.DjIds;
-        var cast = ResolveCast(castIds, djs);
+        // ゲストコーナー（W14）はその日の編成の末尾にゲストを足す（cast に居ないため別持ち）。
+        var guest = corner.Format == CornerFormat.Guest ? context.Guest : null;
+        var cast = new List<DjProfile>(ResolveCast(castIds, djs));
+        if (guest is not null)
+        {
+            cast.Add(guest);
+            _onEvent?.Invoke(new CornerEvent.GuestReady(guest.Name));
+        }
         var theme = SelectTheme(corner);
         _onEvent?.Invoke(new CornerEvent.ThemeSelected(theme));
         var dateContext = SeasonPhrases.DateContext(_clock.Now, _timeZone);
@@ -124,6 +136,10 @@ public sealed class CornerEngine
             _onEvent?.Invoke(new CornerEvent.LetterReady(letter.RadioName));
             songContext = $"ラジオコーナー「{corner.Title}」でリスナーのお便りに応えてかけるリクエスト曲。お便りの内容: {letter.Body}";
         }
+        else if (corner.Format == CornerFormat.Guest)
+        {
+            songContext = $"ラジオコーナー「{corner.Title}」（テーマ: {theme}）でゲストを迎えての会話の締めにかける曲";
+        }
         else
         {
             songContext = $"ラジオコーナー「{corner.Title}」（テーマ: {theme}）の締めにかける曲";
@@ -135,7 +151,7 @@ public sealed class CornerEngine
 
         var script = await generator.GenerateAsync(
             corner, cast, song, theme: theme, dateContext: dateContext, letter: letter,
-            greeting: context.Greeting, ct: ct).ConfigureAwait(false);
+            greeting: context.Greeting, guest: guest, ct: ct).ConfigureAwait(false);
         _onEvent?.Invoke(new CornerEvent.ScriptReady(script.Lines.Count, script.TotalCharacters));
 
         // 全行を事前合成（本番の TTS 待ちをゼロに。準備は OP・冒頭曲の再生中に進む想定）。
@@ -145,10 +161,19 @@ public sealed class CornerEngine
             lineAudio.Add(await _tts.SynthesizeAsync(line.Text, SpeakerIdFor(line, cast), ct).ConfigureAwait(false));
         }
 
-        // 時報リード文は事前合成しない（時刻が再生時点でずれるため）。テンプレートのまま保持し run で発話直前展開（W13.5 §3）。
+        // 時報リード文は事前合成しない（時刻が再生時点でずれるため）。{theme}/{guest} は確定済みなので準備時に埋め、
+        // 時刻プレースホルダのみ残して run で発話直前展開（W13.5 §3 / W14 §3）。
         var leadIn = string.IsNullOrEmpty(context.LeadIn) ? null : context.LeadIn;
+        if (leadIn is not null)
+        {
+            leadIn = leadIn.Replace("{theme}", theme);
+            if (guest is not null)
+            {
+                leadIn = leadIn.Replace("{guest}", guest.Name);
+            }
+        }
         return new PreparedCorner(
-            corner, song, script, lineAudio, castIds, LeadIn: leadIn, LeadInSpeakerId: cast[0].SpeakerId);
+            corner, song, script, lineAudio, castIds, LeadIn: leadIn, LeadInSpeakerId: cast[0].SpeakerId, Guest: guest);
     }
 
     /// <summary>本番（発話 + 一曲。正常・例外・キャンセルいずれも最後は必ず pause）。</summary>
@@ -157,7 +182,12 @@ public sealed class CornerEngine
         var castIds = prepared.CastDjIds.Count > 0 ? prepared.CastDjIds : prepared.Corner.DjIds;
         try
         {
-            var cast = ResolveCast(castIds, djs);
+            // ゲストは djs に居ないため prepared から末尾に補う（準備時と同じ並び。W14）。
+            var cast = new List<DjProfile>(ResolveCast(castIds, djs));
+            if (prepared.Guest is not null)
+            {
+                cast.Add(prepared.Guest);
+            }
             await PerformAsync(prepared, cast, ct).ConfigureAwait(false);
         }
         catch

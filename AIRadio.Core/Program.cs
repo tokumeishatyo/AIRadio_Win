@@ -117,6 +117,7 @@ public readonly record struct ProgramLength
 /// <param name="TalkCornerId">トークコーナー（<c>corners.yaml</c> の id）。番組の長さ N はこのコーナーの本数。</param>
 /// <param name="LetterCornerId">お便りコーナー（<c>corners.yaml</c> の id）。</param>
 /// <param name="NewsDjId">ニュースの読み手（null なら anchor。曜日に依存しない固定読み手）。</param>
+/// <param name="GuestCornerId">ゲストコーナー（<c>corners.yaml</c> の id。W14）。null でゲストコーナー無効。設定すると最初の news 直後に 1 回挿入。</param>
 public sealed record ProgramBlueprint(
     string Title,
     string AnchorDjId,
@@ -125,7 +126,8 @@ public sealed record ProgramBlueprint(
     SongSegmentSpec Song,
     string TalkCornerId,
     string LetterCornerId,
-    string? NewsDjId = null)
+    string? NewsDjId = null,
+    string? GuestCornerId = null)
 {
     /// <summary>曜日替わり編成（先頭＝メイン。W13.5）。既定は <see cref="WeeklyCast.Standard"/>（program.yaml で上書き可）。</summary>
     public WeeklyCast WeeklyCast { get; init; } = WeeklyCast.Standard;
@@ -152,8 +154,30 @@ public sealed class ProgramPlan
     public string AnchorDjId => Blueprint.AnchorDjId;
 
     /// <summary>
+    /// この番組がゲストコーナーを実際に含むか（<c>GuestCornerId</c> 設定 かつ 最初の news が存在＝N≥2 / エンドレス。W14 §2）。
+    /// ゲストが出ない放送（N≤1 等）ではプール空でも誤って検証・中止しないために番組側がこれを見る。
+    /// </summary>
+    public bool IncludesGuestCorner
+    {
+        get
+        {
+            if (Blueprint.GuestCornerId is null)
+            {
+                return false;
+            }
+            return Length.IsEndless || Length.Corners >= 2;
+        }
+    }
+
+    /// <summary>ゲスト talk が入る body 位置（最初の news の次 = body 4）。挿入しないなら null。</summary>
+    private int? GuestBodyPosition => IncludesGuestCorner ? 4 : null;
+
+    /// <summary>body 位置より手前にある割り込み（ゲスト）の個数。素のパターン参照の補正に使う（W14 §2）。</summary>
+    private int InsertionsBefore(int body) => GuestBodyPosition is int gp && gp < body ? 1 : 0;
+
+    /// <summary>
     /// 総セグメント数（エンドレスは null。UI の「n/全体」表示用）。
-    /// 有限: OP + song + 本編（ペア×4 + 端数）+ ED = <c>2 + (N/2)*4 + (N%2) + 1</c>。
+    /// 有限: OP + song + 本編（ペア×4 + 端数）+ ED（+ ゲスト 1）= <c>2 + (N/2)*4 + (N%2) + 1 + (ゲスト ? 1 : 0)</c>。
     /// </summary>
     public int? TotalSegmentCount
     {
@@ -164,7 +188,7 @@ public sealed class ProgramPlan
                 return null;
             }
             var n = Length.Corners;
-            return 2 + (n / 2) * 4 + (n % 2) + 1;
+            return 2 + (n / 2) * 4 + (n % 2) + 1 + (IncludesGuestCorner ? 1 : 0);
         }
     }
 
@@ -186,8 +210,21 @@ public sealed class ProgramPlan
         return BodySegment(index - 2);
     }
 
-    /// <summary>本編 body の index → セグメント（<c>talk, talk, letter, news</c> の繰り返し + 端数 + ED）。</summary>
+    /// <summary>
+    /// 本編 body の index → セグメント。ゲスト割り込み（body 4 = 最初の news の次）を差し込み、
+    /// それ以外は「割り込みを除いた素 body」でパターンを参照する（W14 §2）。
+    /// </summary>
     private ProgramSegment? BodySegment(int body)
+    {
+        if (GuestBodyPosition == body)
+        {
+            return new ProgramSegment(SegmentKind.Talk, Blueprint.GuestCornerId);
+        }
+        return PatternBodySegment(body - InsertionsBefore(body));
+    }
+
+    /// <summary>ゲスト挿入を考慮しない素の本編 body（<c>talk, talk, letter, news</c> の繰り返し + 端数 + ED）。</summary>
+    private ProgramSegment? PatternBodySegment(int body)
     {
         if (Length.IsEndless)
         {

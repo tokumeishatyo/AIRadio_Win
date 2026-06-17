@@ -60,6 +60,8 @@ public sealed class BroadcastEngine
     private readonly IClock _clock;
     private readonly TimeZoneInfo _timeZone;
     private readonly Action<BroadcastEvent>? _onEvent;
+    /// <summary>ゲスト選定用の乱数（count → 0..count-1。テストは決定論的に注入。W14）。</summary>
+    private readonly Func<int, int> _randomIndex;
 
     /// <param name="songPicker">冒頭曲の選曲（null・失敗時は <see cref="SongSegmentSpec.FallbackTrackUri"/> に倒す）。</param>
     /// <param name="newsAnnouncement">
@@ -67,6 +69,7 @@ public sealed class BroadcastEngine
     /// （§3-4）、App が <c>ct =&gt; provider.AnnouncementAsync(ct)</c> を渡す。news 出現のたびに呼ぶ。
     /// </param>
     /// <param name="timeZone">時刻プレースホルダの解釈に使うタイムゾーン（W8。省略時は <see cref="TimeZoneInfo.Local"/>）。</param>
+    /// <param name="randomIndex">ゲスト選定用の乱数（W14。省略時は <see cref="Random.Shared"/>）。</param>
     public BroadcastEngine(
         ThemeSequencer themeSequencer,
         CornerEngine cornerRunner,
@@ -75,7 +78,8 @@ public sealed class BroadcastEngine
         ISpotifyController spotify,
         IClock clock,
         Action<BroadcastEvent>? onEvent = null,
-        TimeZoneInfo? timeZone = null)
+        TimeZoneInfo? timeZone = null,
+        Func<int, int>? randomIndex = null)
     {
         _themeSequencer = themeSequencer;
         _cornerRunner = cornerRunner;
@@ -85,17 +89,20 @@ public sealed class BroadcastEngine
         _clock = clock;
         _onEvent = onEvent;
         _timeZone = timeZone ?? TimeZoneInfo.Local;
+        _randomIndex = randomIndex ?? (n => Random.Shared.Next(n));
     }
 
     /// <summary>番組を 1 本通しで実行する（単一のキャンセル可能 Task として呼ばれる前提）。</summary>
     /// <param name="plan">コーナー数 N からセグメントを生成する番組（W13）。</param>
     /// <param name="control">「ED で終了」操作ハンドル（null なら ED 終了なし）。</param>
+    /// <param name="guests">ゲストコーナー（W14）のプール（省略時 空＝ゲスト無効）。放送開始時に 1 名選定する。</param>
     public async Task RunAsync(
         ProgramPlan plan,
         BroadcastThemes themes,
         IReadOnlyList<CornerTemplate> corners,
         IReadOnlyList<DjProfile> djs,
         BroadcastControl? control = null,
+        IReadOnlyList<DjProfile>? guests = null,
         CancellationToken ct = default)
     {
         // 1. preflight（fail-fast、音を出す前）: anchor DJ・talk/letter コーナー・news 読み手を blueprint から検証。
@@ -113,6 +120,33 @@ public sealed class BroadcastEngine
             throw ConfigException.MissingField($"program.news.dj_id に未定義の DJ: {newsDjId}");
         }
 
+        // ゲストコーナー検証＋選定（W14）。実際にゲスト枠が出る放送のときだけ行う
+        //（N<2 等でゲストが出ないなら、プール空でも誤って放送中止しない）。
+        DjProfile? selectedGuest = null;
+        var guestPool = guests ?? Array.Empty<DjProfile>();
+        if (plan.Blueprint.GuestCornerId is string guestCornerId && plan.IncludesGuestCorner)
+        {
+            if (corners.All(c => c.Id != guestCornerId))
+            {
+                throw ConfigException.MissingField($"program.guest.corner_id に未定義のコーナー: {guestCornerId}");
+            }
+            // ゲストコーナー id はトーク／お便りと別物でなければならない（同じだと全トークがゲスト化する）。
+            if (guestCornerId == plan.Blueprint.TalkCornerId || guestCornerId == plan.Blueprint.LetterCornerId)
+            {
+                throw ConfigException.MissingField($"program.guest.corner_id が talk/letter と重複: {guestCornerId}");
+            }
+            if (guestPool.Count == 0)
+            {
+                throw ConfigException.MissingField("guests: ゲストプールが空です（ゲストコーナー有効時は必須）");
+            }
+            var collision = guestPool.FirstOrDefault(g => djs.Any(d => d.Id == g.Id));
+            if (collision is not null)
+            {
+                throw ConfigException.MissingField($"guests にレギュラーと衝突する id: {collision.Id}");
+            }
+            selectedGuest = guestPool[_randomIndex(guestPool.Count)];
+        }
+
         // 当日の編成（先頭＝メイン）を解決（W13.5。空・未定義 id は fail-fast）。OP/ED/トークを仕切る。
         var castDjIds = plan.Blueprint.WeeklyCast.DjIds(_clock.Now, _timeZone);
         if (castDjIds.Count == 0)
@@ -127,7 +161,7 @@ public sealed class BroadcastEngine
         var ledger = new PreparationLedger();
         try
         {
-            await BroadcastAsync(plan, themes, corners, djs, anchor, cast, main, control, ledger, ct).ConfigureAwait(false);
+            await BroadcastAsync(plan, themes, corners, djs, anchor, cast, main, selectedGuest, control, ledger, ct).ConfigureAwait(false);
         }
         finally
         {
@@ -145,6 +179,7 @@ public sealed class BroadcastEngine
         DjProfile anchor,
         IReadOnlyList<DjProfile> cast,
         DjProfile main,
+        DjProfile? guest,
         BroadcastControl? control,
         PreparationLedger ledger,
         CancellationToken ct)
@@ -168,7 +203,7 @@ public sealed class BroadcastEngine
                 {
                     return; // 有限番組の末尾（ED の次）に到達。
                 }
-                StartPreparation(index, seg, corners, djs, songContext, castDjIds, firstTalkIndex, greeting, ledger, ct);
+                StartPreparation(index, seg, corners, djs, songContext, castDjIds, firstTalkIndex, greeting, plan.Blueprint.GuestCornerId, guest, ledger, ct);
             }
         }
 
@@ -242,6 +277,8 @@ public sealed class BroadcastEngine
         IReadOnlyList<string> castDjIds,
         int firstTalkIndex,
         string? greeting,
+        string? guestCornerId,
+        DjProfile? guest,
         PreparationLedger ledger,
         CancellationToken ct)
     {
@@ -250,11 +287,20 @@ public sealed class BroadcastEngine
             case SegmentKind.Talk:
                 // corner は preflight 済み（必ず見つかる）。準備（LLM 台本 + 全行 TTS）を裏で起動。
                 var corner = corners.First(c => c.Id == segment.CornerId);
-                // 冒頭トークにのみ時刻連動の挨拶、他コーナーは時報リード文（W13.5 §3）。cast は当日編成（先頭＝メイン）。
-                var context = new CornerContext(
-                    CastDjIds: castDjIds,
-                    Greeting: index == firstTalkIndex ? greeting : null,
-                    LeadIn: index == firstTalkIndex ? null : corner.LeadIn);
+                // ゲストコーナー（W14）はゲストを cast 末尾へ。判定はゲスト分岐を先に（万一ゲストが最初の talk でも挨拶を付けない）。
+                // それ以外は冒頭トークにのみ挨拶、他コーナーは時報リード文（W13.5 §3）。cast は当日編成（先頭＝メイン）。
+                CornerContext context;
+                if (guestCornerId is not null && segment.CornerId == guestCornerId)
+                {
+                    context = new CornerContext(CastDjIds: castDjIds, Greeting: null, LeadIn: corner.LeadIn, Guest: guest);
+                }
+                else
+                {
+                    context = new CornerContext(
+                        CastDjIds: castDjIds,
+                        Greeting: index == firstTalkIndex ? greeting : null,
+                        LeadIn: index == firstTalkIndex ? null : corner.LeadIn);
+                }
                 var talkToken = ledger.BeginPreparation(index, ct);
                 ledger.AddCorner(index, PrepareCornerAsync(corner, djs, context, index, ledger, talkToken));
                 break;

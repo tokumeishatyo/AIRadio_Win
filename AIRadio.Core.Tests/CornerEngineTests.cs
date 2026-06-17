@@ -61,11 +61,10 @@ public class CornerEngineTests
     }
 
     [Theory]
-    [InlineData(CornerFormat.Guest)]        // W14
-    [InlineData(CornerFormat.ArtistFeature)] // W15
+    [InlineData(CornerFormat.ArtistFeature)] // W15（専用エンジン）
     public async Task PrepareAsync_UnsupportedFormat_ThrowsConfigException(CornerFormat format)
     {
-        // letter は W12 で対応済み。guest / artist_feature は引き続き未対応（同一ガード）。
+        // letter は W12、guest は W14 で対応済み。artist_feature のみ CornerEngine では未対応。
         var engine = new CornerEngine(
             new ScriptedLLM(), new InMemoryTTS(), new SpyAudioPlayer(),
             new FakeTrackSearcher(), new FakeSpotifyController(), new FakeClock());
@@ -257,6 +256,53 @@ public class CornerEngineTests
         cts.Cancel();
 
         await Assert.ThrowsAsync<OperationCanceledException>(() => engine.RunAsync(prepared, Djs, cts.Token));
+    }
+
+    // --- W14: ゲストコーナー（cast 末尾にゲスト・lead_in の {guest}/{theme} 置換・専門家フレーミング） ---
+
+    private const string GuestScript =
+        "ずんだもん: ようこそなのだ。\n" +
+        "九州そら: こんにちは、お招きありがとうございます。\n" +
+        "ずんだもん: 音楽について教えてほしいのだ。\n" +
+        "四国めたん: わたくしも気になりますわ。";
+
+    [Fact]
+    public async Task PrepareRun_Guest_AppendsGuestToCast_FillsLeadIn_FramesExpert()
+    {
+        var guest = new DjProfile("sora", "九州そら", 16, "おっとり穏やか");
+        var llm = new ScriptedLLM("アイドル - YOASOBI", GuestScript); // 候補 → 台本
+        var searcher = new FakeTrackSearcher(new[] { new TrackInfo("spotify:track:idol", "アイドル", "YOASOBI", IsPlayable: true) });
+        var audio = new SpyAudioPlayer();
+        var events = new List<CornerEvent>();
+        var clock = new FakeClock(new DateTimeOffset(2026, 6, 12, 15, 7, 0, TimeSpan.Zero)); // 午後3時7分 UTC
+        var engine = new CornerEngine(
+            llm, new InMemoryTTS(), audio, searcher, new FakeSpotifyController(), clock,
+            onEvent: e => { lock (events) { events.Add(e); } }, timeZone: TimeZoneInfo.Utc);
+        var corner = new CornerTemplate(
+            "guest", "ゲストコーナー", "音楽", CornerFormat.Guest,
+            new[] { "zundamon", "metan" }, "spotify:track:fb", Volume: 100, PlaySeconds: 5);
+        // エンジンは context.LeadIn を使う（BroadcastEngine が corner.LeadIn を CornerContext に載せる経路を模す）。
+        var context = new CornerContext(
+            CastDjIds: new[] { "zundamon", "metan" },
+            LeadIn: "{ampm}{hour}時。本日は{guest}さんと{theme}を語ります。",
+            Guest: guest);
+
+        var prepared = await engine.PrepareAsync(corner, Djs, context);
+        await engine.RunAsync(prepared, Djs);
+
+        // GuestReady・PreparedCorner.Guest（cast には含めず別持ち）。
+        Assert.Contains(events, e => e is CornerEvent.GuestReady gr && gr.Name == "九州そら");
+        Assert.Equal("sora", prepared.Guest!.Id);
+        Assert.DoesNotContain("sora", prepared.CastDjIds); // CastDjIds は当日 cast（ゲスト除く）
+
+        var played = audio.Played.Select(w => Encoding.UTF8.GetString(w)).ToList();
+        // lead_in: {guest}/{theme} は準備時置換、時刻は発話直前展開。メイン(zundamon=3) が読む。
+        Assert.Equal("3:午後3時。本日は九州そらさんと音楽を語ります。", played[0]);
+        // ゲスト行はゲストの speaker(16) で読まれる。
+        Assert.Contains(played, s => s.StartsWith("16:"));
+        // 台本プロンプトに専門家フレーミング。
+        Assert.Contains(llm.Requests, r => r.Prompt.Contains("ゲスト「九州そら」は「音楽」に詳しい専門家"));
+        Assert.Contains(llm.Requests, r => r.Prompt.Contains("メインがゲスト「九州そら」へお礼"));
     }
 
     private sealed class ThrowingAudioPlayer : IAudioPlayer

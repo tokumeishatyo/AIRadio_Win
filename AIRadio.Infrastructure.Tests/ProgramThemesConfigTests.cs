@@ -149,15 +149,28 @@ public class ProgramThemesConfigTests
     }
 
     [Fact]
-    public void Program_IgnoresFutureSliceKeys()
+    public void Program_IgnoresArtistFeature()
     {
-        // guest / artist_feature（W14/W15）は v2 では無視され壊れない。
-        const string yaml = MinimalProgram +
-            "  guest:\n    corner_id: guest_corner\n" +
-            "  artist_feature:\n    corner_id: feature\n";
+        // artist_feature（W15）は v2 では無視され壊れない（guest は W14 で読むため対象外）。
+        const string yaml = MinimalProgram + "  artist_feature:\n    corner_id: feature\n";
 
         var b = ProgramConfig.FromYaml(yaml);
         Assert.Equal("free_talk", b.TalkCornerId);   // 正常ロード（未知キーは無視）
+        Assert.Null(b.GuestCornerId);
+    }
+
+    [Fact]
+    public void Program_ReadsGuestCornerId()
+    {
+        var b = ProgramConfig.FromYaml(MinimalProgram + "  guest:\n    corner_id: guest\n");
+        Assert.Equal("guest", b.GuestCornerId);
+    }
+
+    [Fact]
+    public void Program_GuestOmitted_GuestCornerIdNull()
+    {
+        var b = ProgramConfig.FromYaml(MinimalProgram);
+        Assert.Null(b.GuestCornerId);
     }
 
     // --- program.yaml weekly_cast（W13.5） ---

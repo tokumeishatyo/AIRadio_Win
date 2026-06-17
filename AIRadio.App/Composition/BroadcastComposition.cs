@@ -45,6 +45,9 @@ internal sealed class BroadcastComposition
             var corners = CornersConfig.LoadFile(Path.Combine(_configDir, "corners.yaml"));
             var blueprint = ProgramConfig.LoadFile(Path.Combine(_configDir, "program.yaml"));
             var themes = ThemesConfig.LoadFile(Path.Combine(_configDir, "themes.yaml"));
+            // ゲストプール（W14）。ファイルが無ければ空（ゲストコーナー無効時はそれでよい。あるのに壊れていれば fail-fast）。
+            var guestsPath = Path.Combine(_configDir, "guests.yaml");
+            var guests = File.Exists(guestsPath) ? GuestsConfig.LoadFile(guestsPath) : Array.Empty<DjProfile>();
 
             // 番組の長さ: メニュー選択（%LOCALAPPDATA% 永続化）が優先、なければ program.yaml の既定値（w13 §5）。
             var length = new ProgramLengthStore().Read() ?? blueprint.DefaultLength;
@@ -92,7 +95,7 @@ internal sealed class BroadcastComposition
             var lengthLabel = plan.Length.IsEndless ? "エンドレス" : $"トーク{plan.Length.Corners}本";
             var countLabel = plan.TotalSegmentCount is int total ? $"・{total} セグメント" : "";
             _log.Log($"放送開始: 「{plan.Title}」（{lengthLabel}{countLabel}）");
-            await engine.RunAsync(plan, themes, corners, djs, control, ct).ConfigureAwait(false);
+            await engine.RunAsync(plan, themes, corners, djs, control, guests, ct).ConfigureAwait(false);
         }
         catch (OperationCanceledException)
         {

@@ -19,21 +19,22 @@ public sealed class DialogueScriptGenerator
 
     public async Task<DialogueScript> GenerateAsync(
         CornerTemplate corner, IReadOnlyList<DjProfile> djs, TrackInfo song, string? theme = null,
-        string dateContext = "", ListenerLetter? letter = null, string? greeting = null,
+        string dateContext = "", ListenerLetter? letter = null, string? greeting = null, DjProfile? guest = null,
         CancellationToken ct = default)
     {
-        var request = MakeRequest(corner, djs, song, theme, dateContext, letter, greeting, _temperature);
+        var request = MakeRequest(corner, djs, song, theme, dateContext, letter, greeting, guest, _temperature);
         var raw = await _llm.GenerateAsync(request, ct).ConfigureAwait(false);
         return Parse(raw, djs);
     }
 
-    // MARK: - プロンプト構築（W6: free_talk / W12: お便り + 日付・季節 / W13.5: 冒頭挨拶 greeting。ゲスト/長期記憶は後続スライス）
+    // MARK: - プロンプト構築（W6: free_talk / W12: お便り + 日付・季節 / W13.5: 冒頭挨拶 greeting / W14: ゲスト。長期記憶は後続スライス）
 
-    /// <param name="djs">出演者（**順序付き・先頭＝メイン**）。メインが主導し、他は相槌・ツッコミ・応答で返す（W13.5 §6）。</param>
+    /// <param name="djs">出演者（**順序付き・先頭＝メイン**、ゲストコーナーは末尾にゲスト）。メインが主導し、他は相槌・ツッコミ・応答で返す（W13.5 §6）。</param>
     /// <param name="greeting">冒頭コーナーのみ非 null（時刻連動の挨拶語）。非 null＝挨拶＋出演者紹介、null＝挨拶抑制で即本題。</param>
+    /// <param name="guest">ゲストコーナーのみ非 null（迎えるゲスト）。専門家フレーミング制約を付与（W14 §4）。</param>
     public static LLMRequest MakeRequest(
         CornerTemplate corner, IReadOnlyList<DjProfile> djs, TrackInfo song, string? theme = null,
-        string dateContext = "", ListenerLetter? letter = null, string? greeting = null,
+        string dateContext = "", ListenerLetter? letter = null, string? greeting = null, DjProfile? guest = null,
         double temperature = 0.9)
     {
         var selectedTheme = theme ?? corner.Theme;
@@ -83,6 +84,13 @@ public sealed class DialogueScriptGenerator
         {
             constraints.Add($"メインがまず「ラジオネーム {letter.RadioName}さんからのお便り」と紹介し、本文をセリフとして自然に読み上げる。");
             constraints.Add($"読み上げのあと、出演者でお便りへの感想を話す（テーマ: {selectedTheme}。脱線してよい）。");
+        }
+        if (guest is not null)
+        {
+            // ゲストコーナー（W14）: 正式紹介はリード文が済ませている前提で、軽い挨拶から専門家トークへ（Mac s14 §4）。
+            constraints.Add($"これはゲストを迎えるコーナー。ゲスト「{guest.Name}」が冒頭で軽く挨拶し（番組名の名乗りや大げさな自己紹介は不要）、メイン「{main}」の進行でテーマ「{selectedTheme}」を会話する。");
+            constraints.Add($"ゲスト「{guest.Name}」は「{selectedTheme}」に詳しい専門家として、具体的なエピソードや豆知識を交えて語る。サブは相づち・質問で会話を回す。");
+            constraints.Add($"コーナーの最後に、メインがゲスト「{guest.Name}」へお礼を述べてから曲を紹介する。");
         }
         if (dateContext.Length > 0)
         {
