@@ -152,4 +152,67 @@ public class DjsCornersConfigTests
         var ex = Assert.Throws<ConfigException>(() => CornersConfig.FromYaml(yaml));
         Assert.Equal("E-CFG-MISSING-FIELD-001", ex.Code);
     }
+
+    // --- W15: アーティスト特集パラメータ（format: artist_feature のときのみ構築・検証） ---
+
+    [Fact]
+    public void Corners_ArtistFeature_BuildsParams_AndMapsFormat()
+    {
+        const string yaml =
+            "corners:\n  - id: artist_feature\n    title: \"特集\"\n    theme: \"x\"\n    format: artist_feature\n" +
+            "    dj_ids: [zundamon]\n    fallback_track_uri: \"spotify:track:fb\"\n" +
+            "    intro_target_chars: 150\n    group_intro_target_chars: 300\n" +
+            "    comment_target_chars: 380\n    comment_short_target_chars: 220\n" +
+            "    outro_line: \"以上、{artist}特集でした。\"\n";
+
+        var c = CornersConfig.FromYaml(yaml)[0];
+
+        Assert.Equal(CornerFormat.ArtistFeature, c.Format);
+        Assert.NotNull(c.ArtistFeatureParams);
+        Assert.Equal(150, c.ArtistFeatureParams!.IntroTargetChars);
+        Assert.Equal(300, c.ArtistFeatureParams.GroupIntroTargetChars);
+        Assert.Equal(380, c.ArtistFeatureParams.CommentTargetChars);
+        Assert.Equal(220, c.ArtistFeatureParams.CommentShortTargetChars);
+        Assert.Equal("以上、{artist}特集でした。", c.ArtistFeatureParams.OutroLine);
+    }
+
+    [Fact]
+    public void Corners_ArtistFeature_OmittedParams_UseDefaults()
+    {
+        const string yaml =
+            "corners:\n  - id: artist_feature\n    title: \"特集\"\n    theme: \"x\"\n    format: artist_feature\n" +
+            "    dj_ids: [zundamon]\n    fallback_track_uri: \"spotify:track:fb\"\n";
+
+        var c = CornersConfig.FromYaml(yaml)[0];
+
+        Assert.NotNull(c.ArtistFeatureParams);
+        Assert.Equal(200, c.ArtistFeatureParams!.IntroTargetChars);          // 既定
+        Assert.Equal(240, c.ArtistFeatureParams.CommentShortTargetChars);    // 既定
+        Assert.Equal("以上、{artist}特集でした。", c.ArtistFeatureParams.OutroLine);
+    }
+
+    [Fact]
+    public void Corners_ArtistFeature_CommentShortNotLessThanComment_ThrowsMissingField()
+    {
+        const string yaml =
+            "corners:\n  - id: artist_feature\n    title: \"特集\"\n    theme: \"x\"\n    format: artist_feature\n" +
+            "    dj_ids: [zundamon]\n    fallback_track_uri: \"spotify:track:fb\"\n" +
+            "    comment_target_chars: 300\n    comment_short_target_chars: 300\n"; // short >= long → fail-fast
+
+        var ex = Assert.Throws<ConfigException>(() => CornersConfig.FromYaml(yaml));
+        Assert.Equal("E-CFG-MISSING-FIELD-001", ex.Code);
+    }
+
+    [Fact]
+    public void Corners_NonArtistFeature_HasNullParams_NoCrossFormatValidation()
+    {
+        // 非 artist_feature では params を構築せず、comment_short/comment の検証もしない（Mac 一致）。
+        const string yaml =
+            "corners:\n  - id: free_talk\n    title: \"フリートーク\"\n    theme: \"音楽\"\n    format: free_talk\n" +
+            "    dj_ids: [zundamon]\n    fallback_track_uri: \"spotify:track:fb\"\n" +
+            "    comment_target_chars: 100\n    comment_short_target_chars: 999\n";
+
+        var c = CornersConfig.FromYaml(yaml)[0];
+        Assert.Null(c.ArtistFeatureParams);
+    }
 }

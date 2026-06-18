@@ -27,6 +27,8 @@ program:
     dj_id: ryusei             # ニュース・天気の専任読み手（青山龍星。曜日に依存しない固定）
   guest:
     corner_id: guest          # ゲストコーナー（W14。最初のニュース直後に 1 回。guests.yaml からランダム選定）
+  artist_feature:
+    corner_id: artist_feature # アーティスト特集（W15。ゲスト直後に 1 回。artists.yaml からランダム選定。空プールはスキップ）
   # 曜日替わりメイン DJ（W13.5。先頭＝メインが OP/ED/時報リード文/トークを仕切る。省略時はコード側 Standard）。
   weekly_cast:
     sunday:    [zundamon, metan, tsumugi]

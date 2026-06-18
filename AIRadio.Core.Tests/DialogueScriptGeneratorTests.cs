@@ -193,4 +193,86 @@ public class DialogueScriptGeneratorTests
         Assert.DoesNotContain("詳しい専門家", request.Prompt);
         Assert.DoesNotContain("ゲスト", request.Prompt);
     }
+
+    // --- W15: アーティスト特集のパート別プロンプト（位置依存・曲名原文一致・固定締め） ---
+
+    private static IReadOnlyList<TrackInfo> FeatureTracks(int n) =>
+        Enumerable.Range(1, n).Select(i => new TrackInfo($"u{i}", $"曲{i}", "米津玄師")).ToList();
+
+    [Fact]
+    public void ArtistFeature_Intro_DeclaresFeature_DefersSongs_HasAntiShowClose()
+    {
+        var request = DialogueScriptGenerator.MakeArtistFeatureRequest(
+            new ArtistFeaturePart.Intro(), "米津玄師", Djs, targetCharacters: 200);
+
+        Assert.Contains("「導入」", request.Prompt);
+        Assert.Contains("米津玄師", request.Prompt);
+        Assert.Contains("まだ曲名には触れない", request.Prompt);
+        Assert.Contains("番組全体を締めくくる言い方", request.Prompt); // 途中＝終了風抑止（§18-7 Win 長形）
+        Assert.Contains("ラストナンバー", request.Prompt);
+        Assert.Contains("放送作家", request.System!);
+    }
+
+    [Fact]
+    public void ArtistFeature_FirstGroupIntro_IsPlain_NoContinuityNoLastMarker()
+    {
+        var request = DialogueScriptGenerator.MakeArtistFeatureRequest(
+            new ArtistFeaturePart.GroupIntro(FeatureTracks(3), Index: 0, Total: 3), "米津玄師", Djs, targetCharacters: 320);
+
+        Assert.Contains("「曲1」（米津玄師）", request.Prompt);          // 曲名・アーティスト名を原文で列挙
+        Assert.Contains("一字一句そのまま", request.Prompt);            // 捏造防止
+        Assert.Contains("各曲に聴きどころを軽く添え", request.Prompt);  // 1 回目は素直
+        Assert.DoesNotContain("すでに進行中", request.Prompt);
+        Assert.DoesNotContain("最後はこの", request.Prompt);
+    }
+
+    [Fact]
+    public void ArtistFeature_MiddleGroupIntro_HasContinuity_NotLast()
+    {
+        var request = DialogueScriptGenerator.MakeArtistFeatureRequest(
+            new ArtistFeaturePart.GroupIntro(FeatureTracks(3), Index: 1, Total: 3), "米津玄師", Djs, targetCharacters: 320);
+
+        Assert.Contains("すでに進行中", request.Prompt);
+        Assert.Contains("引き続き", request.Prompt);
+        Assert.Contains("新しく始めるような言い方", request.Prompt);    // 「続いては〜特集」禁止（fix2）
+        Assert.Contains("やり直さず", request.Prompt);
+        Assert.DoesNotContain("最後はこの", request.Prompt);            // まだ最後ではない
+    }
+
+    [Fact]
+    public void ArtistFeature_LastGroupIntro_IsMarkedLast_WithTrackCount()
+    {
+        var oneTrack = DialogueScriptGenerator.MakeArtistFeatureRequest(
+            new ArtistFeaturePart.GroupIntro(FeatureTracks(1), Index: 2, Total: 3), "米津玄師", Djs, targetCharacters: 320);
+        Assert.Contains("最後はこの 1 曲", oneTrack.Prompt);            // 曲数に応じたラスト明示（前後空白あり）
+
+        var twoTracks = DialogueScriptGenerator.MakeArtistFeatureRequest(
+            new ArtistFeaturePart.GroupIntro(FeatureTracks(2), Index: 1, Total: 2), "米津玄師", Djs, targetCharacters: 320);
+        Assert.Contains("最後はこの 2 曲", twoTracks.Prompt);
+    }
+
+    [Fact]
+    public void ArtistFeature_SingleGroupIntro_K3_IsPlain_NotMarkedLast()
+    {
+        // K=3（唯一グループ）は index 0 / total 1 ＝ 1 回目扱い（isFirst）。ラスト明示は付けない。
+        var request = DialogueScriptGenerator.MakeArtistFeatureRequest(
+            new ArtistFeaturePart.GroupIntro(FeatureTracks(3), Index: 0, Total: 1), "米津玄師", Djs, targetCharacters: 320);
+
+        Assert.Contains("各曲に聴きどころを軽く添え", request.Prompt);
+        Assert.DoesNotContain("最後はこの", request.Prompt);
+        Assert.DoesNotContain("すでに進行中", request.Prompt);
+    }
+
+    [Fact]
+    public void ArtistFeature_Comment_ShorterVsLong()
+    {
+        var longComment = DialogueScriptGenerator.MakeArtistFeatureRequest(
+            new ArtistFeaturePart.Comment(Shorter: false), "米津玄師", Djs, targetCharacters: 400);
+        Assert.Contains("自由に話す", longComment.Prompt);
+        Assert.Contains("次の曲紹介には踏み込まない", longComment.Prompt);
+
+        var shortComment = DialogueScriptGenerator.MakeArtistFeatureRequest(
+            new ArtistFeaturePart.Comment(Shorter: true), "米津玄師", Djs, targetCharacters: 240);
+        Assert.Contains("前の感想より短く", shortComment.Prompt);
+    }
 }

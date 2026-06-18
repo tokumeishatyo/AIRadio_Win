@@ -7,8 +7,8 @@ namespace AIRadio.Infrastructure;
 /// セグメント列は <see cref="ProgramPlan"/> がコーナー数 N から生成するため、本ローダは部品（OP/song/talk/letter/news）と
 /// 既定の番組長だけを読む。<c>anchor_dj_id</c> / <c>song.fallback_track_uri</c> / <c>talk.corner_id</c> /
 /// <c>letter.corner_id</c> 欠落、<c>default_length</c> 不正は fail-fast（<see cref="ConfigException"/>,
-/// <c>E-CFG-MISSING-FIELD-001</c>）。曜日替わり編成（<c>weekly_cast</c>, W13.5）・ゲスト（<c>guest.corner_id</c>, W14）も読む。
-/// アーティスト特集（<c>artist_feature</c>）は W15 で追加（現状は <c>IgnoreUnmatchedProperties</c> で無視）。
+/// <c>E-CFG-MISSING-FIELD-001</c>）。曜日替わり編成（<c>weekly_cast</c>, W13.5）・ゲスト（<c>guest.corner_id</c>, W14）・
+/// アーティスト特集（<c>artist_feature.corner_id</c>, W15）も読む（いずれも null で無効）。
 /// </summary>
 public static class ProgramConfig
 {
@@ -47,7 +47,8 @@ public static class ProgramConfig
             TalkCornerId: program.Talk.CornerId,
             LetterCornerId: program.Letter.CornerId,
             NewsDjId: program.News?.DjId,
-            GuestCornerId: program.Guest?.CornerId)
+            GuestCornerId: program.Guest?.CornerId,
+            ArtistFeatureCornerId: program.ArtistFeature?.CornerId)
         {
             WeeklyCast = ParseWeeklyCast(program.WeeklyCast),
         };
@@ -130,7 +131,8 @@ public static class ProgramConfig
         public TalkDto? Talk { get; set; }
         public TalkDto? Letter { get; set; }
         public NewsDto? News { get; set; }
-        public TalkDto? Guest { get; set; }   // W14: ゲストコーナー（corner_id のみ。artist_feature は W15 で未追加＝無視）
+        public TalkDto? Guest { get; set; }           // W14: ゲストコーナー（corner_id のみ）
+        public TalkDto? ArtistFeature { get; set; }   // W15: アーティスト特集（corner_id のみ）
         public Dictionary<string, List<string>>? WeeklyCast { get; set; }
     }
 

@@ -1,5 +1,5 @@
 # コーナーテンプレートの一覧。基本パターン: テーマについて DJ 二人が会話し、最後に一曲かける。
-# free_talk / letter（お便り）は W12。guest / artist_feature は後続スライス。
+# free_talk / letter（お便り）は W12。guest は W14、artist_feature（アーティスト特集）は W15。
 # themes: テーマプール（空でなければ準備のたびにランダムに 1 つ選ぶ。空なら theme 固定）。
 # 時報リード文（lead_in）は W13.5 で追加。
 # fallback_track_uri: 候補曲が全滅したときの保険（共有 URL / spotify:track: / 裸 ID いずれも可）。
@@ -74,5 +74,22 @@ corners:
     chars_per_minute: 320
     song_prompt_hint: "テーマやゲストの話に合う、よく知られた邦楽・洋楽"
     fallback_track_uri: "spotify:track:5jsqaNOAbeBG5QYL7JpySJ"
+    volume: 100
+    play_seconds: 0
+  - id: artist_feature
+    title: "アーティスト特集"
+    theme: "アーティスト特集"      # 特集はテーマ不要だが loader 必須項目として置く（台本生成では未使用）
+    format: artist_feature
+    # {artist}（特集アーティスト名）は準備時に置換。時刻は発話直前展開（W15）。
+    lead_in: "{ampm}{hour}時{minute}分になりました。ここからはアーティスト特集です。本日は{artist}さんを特集します。"
+    # 固定の締め（LLM 生成しない。{artist} は準備時に実名展開）。
+    outro_line: "以上、{artist}特集でした。"
+    # パート別の目標文字数（comment_short < comment はロード時に検証）。
+    intro_target_chars: 200
+    group_intro_target_chars: 320
+    comment_target_chars: 400
+    comment_short_target_chars: 240
+    dj_ids: [zundamon, metan]   # cast は当日編成で上書きされるが、必須項目として置く
+    fallback_track_uri: "spotify:track:5jsqaNOAbeBG5QYL7JpySJ"  # 必須項目（特集は top-tracks 確定なので未使用）
     volume: 100
     play_seconds: 0

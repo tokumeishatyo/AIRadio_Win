@@ -191,6 +191,30 @@ public sealed class FakeSpotifyController : ISpotifyController
         => Task.FromResult(_duration);
 }
 
+/// <summary>アーティスト名→代表曲を返す <see cref="IArtistCatalog"/> の fake（W15）。問い合わせた名前を記録する。</summary>
+public sealed class FakeArtistCatalog : IArtistCatalog
+{
+    private readonly object _lock = new();
+    private readonly IReadOnlyDictionary<string, IReadOnlyList<TrackInfo>> _byArtist;
+    private readonly List<string> _requested = new();
+
+    public FakeArtistCatalog(IReadOnlyDictionary<string, IReadOnlyList<TrackInfo>>? byArtist = null)
+        => _byArtist = byArtist ?? new Dictionary<string, IReadOnlyList<TrackInfo>>();
+
+    public IReadOnlyList<string> Requested
+    {
+        get { lock (_lock) { return _requested.ToList(); } }
+    }
+
+    public Task<IReadOnlyList<TrackInfo>> TopTracksAsync(string artistName, int limit, CancellationToken ct = default)
+    {
+        lock (_lock) { _requested.Add(artistName); }
+        var tracks = _byArtist.TryGetValue(artistName, out var t) ? t : Array.Empty<TrackInfo>();
+        IReadOnlyList<TrackInfo> page = tracks.Take(limit).ToList();
+        return Task.FromResult(page);
+    }
+}
+
 /// <summary>ログメッセージを記録する IRadioLog（テスト用）。</summary>
 public sealed class CollectingRadioLog : IRadioLog
 {

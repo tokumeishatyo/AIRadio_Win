@@ -107,6 +107,91 @@ public sealed class DialogueScriptGenerator
         return new LLMRequest(string.Join("\n\n", sections), System: system, Temperature: temperature);
     }
 
+    /// <summary>
+    /// アーティスト特集（W15）の発話パート別 LLM リクエスト。各パートを個別生成する（<see cref="MakeRequest"/> とは別の兄弟ビルダー）。
+    /// 曲名は与えられた表記をそのまま使わせる（プレフライト済みの実曲名と一致＝紹介と再生の不一致を防ぐ）。
+    /// 途中コーナーの anti-show-close 句は <see cref="MakeRequest"/> の途中分岐と同一の Win 形を使う（spec §18-7）。
+    /// </summary>
+    public static LLMRequest MakeArtistFeatureRequest(
+        ArtistFeaturePart part, string artistName, IReadOnlyList<DjProfile> djs,
+        string dateContext = "", int targetCharacters = 0, double temperature = 0.9)
+    {
+        var names = string.Join("」「", djs.Select(d => d.Name));
+        var main = djs.Count > 0 ? djs[0].Name : names;
+        var profiles = string.Join("\n", djs.Select(d => $"- {d.Name}: {d.Persona}"));
+
+        var constraints = new List<string>
+        {
+            $"セリフの合計は {targetCharacters} 文字以上、{targetCharacters * 12 / 10} 文字以内。短すぎる台本は不可。",
+            "出力は台本のみ。1 行につき 1 つのセリフを「DJ名: セリフ」の形式で書く。",
+            $"DJ名は「{names}」のみ。ナレーション、ト書き、見出し、記号装飾は書かない。",
+            $"進行はメイン「{main}」が主導し、ほかの出演者は相槌・ツッコミ・応答で自然に返す。",
+            "各 DJ は上記プロフィールにある自分の一人称・口調・語尾だけを使う。ある DJ の特徴的な語尾（例:「〜のだ」）を、その DJ 以外のセリフに混ぜてはいけない（とくにメインの語尾を他の出演者に伝染させない）。",
+            "これは番組の途中。挨拶・自己紹介・番組名の名乗りはせず、いきなり本題から始める。このあとも別のコーナーが続くので、番組全体を締めくくる言い方（「本日最後の曲」「ラストナンバー」「また来週」「お別れの時間」など）はしない。",
+        };
+
+        List<string> sections;
+        switch (part)
+        {
+            case ArtistFeaturePart.Intro:
+                sections = new List<string> { "ラジオ番組のアーティスト特集の「導入」の会話台本を書いてください。" };
+                constraints.Add($"メイン「{main}」が『ここからはアーティスト特集』と宣言し、本日特集するアーティスト「{artistName}」への思いや好きなところを一言添える。");
+                constraints.Add("まだ曲名には触れない（曲の紹介は次のパートで行う）。");
+                break;
+            case ArtistFeaturePart.GroupIntro gi:
+                var isFirst = gi.Index == 0;
+                var isLast = gi.Index == gi.Total - 1;
+                var list = string.Join("、", gi.Tracks.Select(t => $"「{t.Title}」（{t.Artist}）"));
+                sections = new List<string>
+                {
+                    $"ラジオ番組のアーティスト特集で、これから連続で流す {gi.Tracks.Count} 曲をまとめて紹介する会話台本を書いてください。",
+                    $"# 紹介する曲（この順で）\n{list}",
+                };
+                constraints.Add("上の曲を順に紹介する。曲名・アーティスト名は与えられた表記を一字一句そのまま言い、言い換え・推測・別情報の捏造をしない。");
+                if (isFirst)
+                {
+                    // 1 回目（または唯一）のグループ: 従来どおり自然に曲紹介へ入る（仕様 w15 §7）。
+                    constraints.Add("各曲に聴きどころを軽く添え、曲へ送り出して締める。");
+                }
+                else
+                {
+                    // 2 回目以降のグループ: すでに進行中の特集を「続ける」つなぎにする。
+                    // 「続いては〇〇特集」のように新しく特集が始まる言い方は禁止（ライブ確認 fix2、仕様 w15 §7）。
+                    constraints.Add($"この特集は「{artistName}」特集としてすでに進行中で、前のグループを聴き終えたところ。「{artistName}特集です」と新しく始めるような言い方（「続いては{artistName}特集」など）は禁止。「引き続き{artistName}の曲を」「同じ{artistName}から、次は」のように、いま進行中の特集をそのまま続けるつなぎで前を受ける。アーティストの紹介はやり直さず、曲の紹介に集中する。");
+                    constraints.Add("各曲に聴きどころを軽く添え、曲へ送り出して締める。");
+                }
+                if (isLast && !isFirst)
+                {
+                    // 最後のグループ: 曲数に応じてラストである旨を一言添える（縮約で 1〜3 曲、仕様 w15 §7）。
+                    constraints.Add($"これが特集で流す最後のグループ。「最後はこの {gi.Tracks.Count} 曲」のように、曲数（{gi.Tracks.Count} 曲）に応じて最後である旨を一言添える。");
+                }
+                break;
+            case ArtistFeaturePart.Comment comment:
+                sections = new List<string> { "ラジオ番組のアーティスト特集で、今流した曲を聴いたあとの感想・雑談の会話台本を書いてください。" };
+                constraints.Add(comment.Shorter
+                    ? "前の感想より短く、テンポよくまとめる。"
+                    : "出演者で曲やアーティストの感想を自由に話す（少し脱線してよい）。");
+                constraints.Add("次の曲紹介には踏み込まない（紹介は別パートで行う）。");
+                break;
+            default:
+                throw new ArgumentOutOfRangeException(nameof(part));
+        }
+
+        if (dateContext.Length > 0)
+        {
+            sections.Add($"# 今日の日付と季節\n{dateContext}");
+            constraints.Add("季節や時候の話に触れるなら、上の日付・季節に合わせる。");
+        }
+        sections.Add("# 制約\n" + string.Join("\n", constraints.Select(c => $"- {c}")));
+
+        var system =
+            "あなたはラジオ番組「ケイラボAIラジオ」の放送作家です。\n" +
+            "リスナーが作業しながら聴ける、肩の力の抜けた楽しい会話を書きます。\n\n" +
+            "# 出演DJ\n" + profiles;
+
+        return new LLMRequest(string.Join("\n\n", sections), System: system, Temperature: temperature);
+    }
+
     // MARK: - パース
 
     public static DialogueScript Parse(string raw, IReadOnlyList<DjProfile> djs, int minLines = 4)

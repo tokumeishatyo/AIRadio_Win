@@ -48,6 +48,8 @@ internal sealed class BroadcastComposition
             // ゲストプール（W14）。ファイルが無ければ空（ゲストコーナー無効時はそれでよい。あるのに壊れていれば fail-fast）。
             var guestsPath = Path.Combine(_configDir, "guests.yaml");
             var guests = File.Exists(guestsPath) ? GuestsConfig.LoadFile(guestsPath) : Array.Empty<DjProfile>();
+            // アーティスト特集プール（W15）。出荷時空・未生成は空＝実行時スキップ（あるのに壊れていれば fail-fast）。
+            var artists = ArtistsConfig.LoadFile(Path.Combine(_configDir, "artists.yaml"));
 
             // 番組の長さ: メニュー選択（%LOCALAPPDATA% 永続化）が優先、なければ program.yaml の既定値（w13 §5）。
             var length = new ProgramLengthStore().Read() ?? blueprint.DefaultLength;
@@ -62,6 +64,7 @@ internal sealed class BroadcastComposition
                 spotifyConfig.ClientId, spotifyConfig.RedirectUri, spotifyConfig.LoopbackPort,
                 scopes, store, http, clock);
             var searcher = new SpotifyWebSearcher(auth, http, spotifyConfig.Market);
+            var catalog = new SpotifyArtistCatalog(auth, http, spotifyConfig.Market);
             var spotify = new WebApiSpotifyController(auth, http, preferredDeviceName: spotifyConfig.DeviceName);
             var tts = new VoicevoxTTS(ttsConfig.Endpoint, http, ttsConfig.SpeedScale);
             var audio = new NAudioPlayer((float)ttsConfig.PlaybackVolume);
@@ -73,6 +76,11 @@ internal sealed class BroadcastComposition
                 llm, tts, audio, searcher, spotify, clock,
                 temperature: llmConfig.Temperature,
                 onEvent: e => _log.Log(FormatCornerEvent(e)));
+            // アーティスト特集ランナー（W15）。onEvent を log へブリッジしないと FeatureSkipped（ART コード）が無出力になる（§18-32）。
+            var artistFeatureEngine = new ArtistFeatureEngine(
+                llm, tts, audio, catalog, spotify, clock,
+                temperature: llmConfig.Temperature,
+                onEvent: e => _log.Log(FormatArtistFeatureEvent(e)));
             var news = new NewsRssSource(research.NewsRssUrl, http, research.NewsMaxItems);
             var weather = new JmaWeatherSource(research.WeatherAreaCode, research.WeatherAreaName, http);
             // ニュースは LLM アナウンサー原稿（W11）。読み手（program.news.dj_id、なければ anchor）のペルソナを使う。
@@ -90,12 +98,13 @@ internal sealed class BroadcastComposition
                 newsAnnouncement: token => newsProvider.AnnouncementAsync(token),
                 spotify,
                 clock,
-                onEvent: e => _log.Log(FormatBroadcastEvent(e)));
+                onEvent: e => _log.Log(FormatBroadcastEvent(e)),
+                artistFeatureRunner: artistFeatureEngine);
 
             var lengthLabel = plan.Length.IsEndless ? "エンドレス" : $"トーク{plan.Length.Corners}本";
             var countLabel = plan.TotalSegmentCount is int total ? $"・{total} セグメント" : "";
             _log.Log($"放送開始: 「{plan.Title}」（{lengthLabel}{countLabel}）");
-            await engine.RunAsync(plan, themes, corners, djs, control, guests, ct).ConfigureAwait(false);
+            await engine.RunAsync(plan, themes, corners, djs, control, guests, artists, ct).ConfigureAwait(false);
         }
         catch (OperationCanceledException)
         {
@@ -107,6 +116,41 @@ internal sealed class BroadcastComposition
             // 設定不正（fail-fast）/ critical セグメント中止 等。
             _log.Log($"エラー [{ex.Code}]: {ex.Message}");
         }
+    }
+
+    /// <summary>
+    /// 「アーティスト一覧を生成」（W15 §9-3）。<c>llm.yaml</c> + <c>spotify.local.yaml</c> をロードして LLM + <see cref="IArtistCatalog"/> を
+    /// 組み立て、<c>artist-gen.yaml</c> の指定で <c>artists.yaml</c> を原子的に上書きする（オフライン・音/再生デバイス不要）。
+    /// 返り値は確定組数。失敗・0 組は throw（呼び出し側でファイル不変＝<see cref="ArtistListGenerator.Write"/> 前に throw）。
+    /// </summary>
+    public async Task<int> GenerateArtistListAsync(CancellationToken ct = default)
+    {
+        var spotifyPath = Path.Combine(_configDir, "spotify.local.yaml");
+        if (!File.Exists(spotifyPath))
+        {
+            throw ConfigException.MissingField("spotify.local.yaml（アーティスト生成には Spotify 認証が必要です）");
+        }
+        var spotifyConfig = SpotifyConfig.LoadFile(spotifyPath);
+        var llmConfig = LlmConfig.LoadFiles(
+            Path.Combine(_configDir, "llm.yaml"), Path.Combine(_configDir, "llm.local.yaml"));
+        var genConfig = ArtistGenConfig.LoadFile(Path.Combine(_configDir, "artist-gen.yaml"));
+
+        var http = new HttpClientAdapter();
+        var clock = new SystemClock();
+        var store = new DpapiTokenStore();
+        string[] scopes = { "user-read-playback-state", "user-modify-playback-state" };
+        var auth = new SpotifyAuth(
+            spotifyConfig.ClientId, spotifyConfig.RedirectUri, spotifyConfig.LoopbackPort,
+            scopes, store, http, clock);
+        var catalog = new SpotifyArtistCatalog(auth, http, spotifyConfig.Market);
+        var llm = new GeminiLLMBackend(llmConfig, http);
+
+        var generator = new ArtistListGenerator(llm, catalog);
+        var artistsPath = Path.Combine(_configDir, "artists.yaml");
+        _log.Log($"アーティスト一覧を生成します（{genConfig.GenrePrompt} / 目標 {genConfig.TargetCount} 組）…");
+        var count = await generator.GenerateAsync(genConfig, artistsPath, ct: ct).ConfigureAwait(false);
+        _log.Log($"アーティスト一覧を生成しました（{count} 組）→ {artistsPath}");
+        return count;
     }
 
     private static string FormatBroadcastEvent(BroadcastEvent e) => e switch
@@ -129,6 +173,20 @@ internal sealed class BroadcastComposition
         CornerEvent.Line x => $"    {x.DialogueLine.DjId}: {x.DialogueLine.Text}",
         CornerEvent.SongStarted x => $"  ♪ 再生中: {Label(x.Track)}",
         CornerEvent.SongFinished x => $"  ♪ 曲終了（検知: {x.Reason}）",
+        _ => "",
+    };
+
+    /// <summary>アーティスト特集（W15）のイベントを log 表示へ。FeatureSkipped は ART コード入り reason をそのまま出す（§11/§15）。</summary>
+    private static string FormatArtistFeatureEvent(ArtistFeatureEvent e) => e switch
+    {
+        ArtistFeatureEvent.ArtistSelected x => $"  特集アーティスト: {x.Name}",
+        ArtistFeatureEvent.TracksPrepared x => $"  特集曲数（重複除外後）: {x.Count} 曲",
+        ArtistFeatureEvent.PartScriptReady x => $"  特集パート台本: {x.LineCount} 行 / {x.TotalCharacters} 文字",
+        ArtistFeatureEvent.LeadIn x => $"  特集リード文: {x.Text}",
+        ArtistFeatureEvent.Line x => $"    {x.DialogueLine.DjId}: {x.DialogueLine.Text}",
+        ArtistFeatureEvent.SongStarted x => $"  ♪ 特集再生中: {Label(x.Track)}",
+        ArtistFeatureEvent.SongFinished x => $"  ♪ 特集曲終了（検知: {x.Reason}）",
+        ArtistFeatureEvent.FeatureSkipped x => $"  特集スキップ: {x.Reason}",
         _ => "",
     };
 

@@ -3,8 +3,12 @@ using System.Globalization;
 namespace AIRadio.Core;
 
 /// <summary>
-/// 番組セグメントの種別。W7 は <see cref="Opening"/> / <see cref="Song"/> / <see cref="Talk"/> /
-/// <see cref="News"/> / <see cref="Ending"/> の 5 種。アーティスト特集 <c>ArtistFeature</c>（W15）は後続で追加する。
+/// 番組セグメントの種別。<see cref="Opening"/> / <see cref="Song"/> / <see cref="Talk"/> /
+/// <see cref="News"/> / <see cref="Ending"/> / <see cref="ArtistFeature"/>（W15）。
+/// <para><b>並び順について</b>: <see cref="ArtistFeature"/> は <see cref="Ending"/> の後ろ（末尾）に置く。
+/// これは enum 宣言順（各値の序数）の話で、放送順とは無関係（特集の放送配置は <see cref="ProgramPlan"/> が body 5 ＝
+/// ゲスト直後・ED の手前に固定する）。Mac は <c>…news, artistFeature, ending</c> 順だが、Win では <c>Ending</c> の序数を
+/// 動かさないため末尾追加とし、Mac↔Win の序数 parity は取らない（spec §18-1）。</para>
 /// </summary>
 public enum SegmentKind
 {
@@ -22,6 +26,9 @@ public enum SegmentKind
 
     /// <summary>エンディング（統一テーマ演出）。</summary>
     Ending,
+
+    /// <summary>アーティスト特集（専用 <see cref="ArtistFeatureEngine"/> で実行。最大 7 曲の連続再生。W15）。</summary>
+    ArtistFeature,
 }
 
 /// <summary>
@@ -118,6 +125,7 @@ public readonly record struct ProgramLength
 /// <param name="LetterCornerId">お便りコーナー（<c>corners.yaml</c> の id）。</param>
 /// <param name="NewsDjId">ニュースの読み手（null なら anchor。曜日に依存しない固定読み手）。</param>
 /// <param name="GuestCornerId">ゲストコーナー（<c>corners.yaml</c> の id。W14）。null でゲストコーナー無効。設定すると最初の news 直後に 1 回挿入。</param>
+/// <param name="ArtistFeatureCornerId">アーティスト特集コーナー（<c>corners.yaml</c> の id。W15）。null で無効。ゲストに従属し、ゲスト直後（body 5）に 1 回挿入。</param>
 public sealed record ProgramBlueprint(
     string Title,
     string AnchorDjId,
@@ -127,7 +135,8 @@ public sealed record ProgramBlueprint(
     string TalkCornerId,
     string LetterCornerId,
     string? NewsDjId = null,
-    string? GuestCornerId = null)
+    string? GuestCornerId = null,
+    string? ArtistFeatureCornerId = null)
 {
     /// <summary>曜日替わり編成（先頭＝メイン。W13.5）。既定は <see cref="WeeklyCast.Standard"/>（program.yaml で上書き可）。</summary>
     public WeeklyCast WeeklyCast { get; init; } = WeeklyCast.Standard;
@@ -169,15 +178,37 @@ public sealed class ProgramPlan
         }
     }
 
+    /// <summary>
+    /// この番組がアーティスト特集を実際に含むか（<c>ArtistFeatureCornerId</c> 設定 かつ ゲストが入る）。
+    /// 特集はゲストに従属する（ゲストが入る放送＝特集も入る／入らない放送＝特集も入らない。W15 §3-2）。
+    /// </summary>
+    public bool IncludesArtistFeature => Blueprint.ArtistFeatureCornerId is not null && IncludesGuestCorner;
+
     /// <summary>ゲスト talk が入る body 位置（最初の news の次 = body 4）。挿入しないなら null。</summary>
     private int? GuestBodyPosition => IncludesGuestCorner ? 4 : null;
 
-    /// <summary>body 位置より手前にある割り込み（ゲスト）の個数。素のパターン参照の補正に使う（W14 §2）。</summary>
-    private int InsertionsBefore(int body) => GuestBodyPosition is int gp && gp < body ? 1 : 0;
+    /// <summary>アーティスト特集が入る body 位置（ゲストの次 = body 5）。挿入しないなら null（W15 §3-3）。</summary>
+    private int? ArtistFeatureBodyPosition => IncludesArtistFeature ? 5 : null;
+
+    /// <summary>body 位置より手前にある割り込み（ゲスト・特集）の個数。素のパターン参照の補正に使う（W14/W15 §3-3）。</summary>
+    private int InsertionsBefore(int body)
+    {
+        var count = 0;
+        if (GuestBodyPosition is int g && g < body)
+        {
+            count++;
+        }
+        if (ArtistFeatureBodyPosition is int a && a < body)
+        {
+            count++;
+        }
+        return count;
+    }
 
     /// <summary>
     /// 総セグメント数（エンドレスは null。UI の「n/全体」表示用）。
-    /// 有限: OP + song + 本編（ペア×4 + 端数）+ ED（+ ゲスト 1）= <c>2 + (N/2)*4 + (N%2) + 1 + (ゲスト ? 1 : 0)</c>。
+    /// 有限: OP + song + 本編（ペア×4 + 端数）+ ED（+ ゲスト 1 + 特集 1）= <c>2 + (N/2)*4 + (N%2) + 1 + (ゲスト ? 1 : 0) + (特集 ? 1 : 0)</c>。
+    /// 特集は plan が必ず 1 個置くため、実行時にスキップ（プール空 / K≤2、W15 §8-4）されても本値は 1 多いまま（許容＝後付け減算しない）。
     /// </summary>
     public int? TotalSegmentCount
     {
@@ -188,7 +219,7 @@ public sealed class ProgramPlan
                 return null;
             }
             var n = Length.Corners;
-            return 2 + (n / 2) * 4 + (n % 2) + 1 + (IncludesGuestCorner ? 1 : 0);
+            return 2 + (n / 2) * 4 + (n % 2) + 1 + (IncludesGuestCorner ? 1 : 0) + (IncludesArtistFeature ? 1 : 0);
         }
     }
 
@@ -211,14 +242,18 @@ public sealed class ProgramPlan
     }
 
     /// <summary>
-    /// 本編 body の index → セグメント。ゲスト割り込み（body 4 = 最初の news の次）を差し込み、
-    /// それ以外は「割り込みを除いた素 body」でパターンを参照する（W14 §2）。
+    /// 本編 body の index → セグメント。ゲスト割り込み（body 4）・アーティスト特集割り込み（body 5）を差し込み、
+    /// それ以外は「割り込みを除いた素 body」でパターンを参照する（W14/W15 §3-3）。
     /// </summary>
     private ProgramSegment? BodySegment(int body)
     {
         if (GuestBodyPosition == body)
         {
             return new ProgramSegment(SegmentKind.Talk, Blueprint.GuestCornerId);
+        }
+        if (ArtistFeatureBodyPosition == body)
+        {
+            return new ProgramSegment(SegmentKind.ArtistFeature, Blueprint.ArtistFeatureCornerId, Critical: false);
         }
         return PatternBodySegment(body - InsertionsBefore(body));
     }

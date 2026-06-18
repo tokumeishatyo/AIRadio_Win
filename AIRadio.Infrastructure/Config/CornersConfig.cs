@@ -46,11 +46,31 @@ public static class CornersConfig
         {
             throw ConfigException.MissingField($"corners[{c.Id}].fallback_track_uri");
         }
+        var format = ParseFormat(c.Format);
+        // アーティスト特集（W15）のときのみパラメータを構築。comment_short < comment をロード時に fail-fast 検証（§13）。
+        ArtistFeatureParams? artistFeatureParams = null;
+        if (format == CornerFormat.ArtistFeature)
+        {
+            var defaults = new ArtistFeatureParams();
+            var commentTarget = c.CommentTargetChars ?? defaults.CommentTargetChars;
+            var commentShortTarget = c.CommentShortTargetChars ?? defaults.CommentShortTargetChars;
+            if (commentShortTarget >= commentTarget)
+            {
+                throw ConfigException.MissingField(
+                    $"corners[{c.Id}].comment_short_target_chars は comment_target_chars より小さくしてください");
+            }
+            artistFeatureParams = new ArtistFeatureParams(
+                IntroTargetChars: c.IntroTargetChars ?? defaults.IntroTargetChars,
+                GroupIntroTargetChars: c.GroupIntroTargetChars ?? defaults.GroupIntroTargetChars,
+                CommentTargetChars: commentTarget,
+                CommentShortTargetChars: commentShortTarget,
+                OutroLine: string.IsNullOrEmpty(c.OutroLine) ? defaults.OutroLine : c.OutroLine!);
+        }
         return new CornerTemplate(
             Id: c.Id,
             Title: c.Title,
             Theme: c.Theme,
-            Format: ParseFormat(c.Format),
+            Format: format,
             DjIds: c.DjIds,
             FallbackTrackUri: c.FallbackTrackUri,
             TargetMinutes: c.TargetMinutes ?? 5,
@@ -59,7 +79,8 @@ public static class CornersConfig
             Volume: c.Volume ?? 85,
             PlaySeconds: c.PlaySeconds ?? 0,
             ThemePool: c.Themes,
-            LeadIn: c.LeadIn);
+            LeadIn: c.LeadIn,
+            ArtistFeatureParams: artistFeatureParams);
     }
 
     private static CornerFormat ParseFormat(string? raw) => raw switch
@@ -91,5 +112,12 @@ public static class CornersConfig
         public int? Volume { get; set; }
         public int? PlaySeconds { get; set; }
         public string? LeadIn { get; set; }
+
+        // W15: アーティスト特集のパート別目標文字数＋固定締め（format: artist_feature のときのみ使用）。
+        public int? IntroTargetChars { get; set; }
+        public int? GroupIntroTargetChars { get; set; }
+        public int? CommentTargetChars { get; set; }
+        public int? CommentShortTargetChars { get; set; }
+        public string? OutroLine { get; set; }
     }
 }

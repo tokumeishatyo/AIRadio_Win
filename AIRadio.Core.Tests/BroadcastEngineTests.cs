@@ -105,7 +105,8 @@ public class BroadcastEngineTests
         TimeZoneInfo? timeZone = null,
         IReadOnlyList<DjProfile>? djs = null,
         Action<BroadcastEvent>? onEvent = null,
-        Func<int, int>? randomIndex = null)
+        Func<int, int>? randomIndex = null,
+        ArtistFeatureEngine? artistRunner = null)
     {
         var events = new List<BroadcastEvent>();
         var audio = new SpyAudioPlayer();
@@ -129,7 +130,7 @@ public class BroadcastEngineTests
         var engine = new BroadcastEngine(
             themeSequencer, corner, firstSongPicker, countedNews, spotify, clock,
             e => { lock (events) { events.Add(e); } onEvent?.Invoke(e); },
-            timeZone, randomIndex);
+            timeZone, randomIndex, artistRunner);
 
         return new Harness(engine, events, audio, () => { lock (newsCalls) { return newsCalls[0]; } });
     }
@@ -770,6 +771,157 @@ public class BroadcastEngineTests
         var spoken = h.Audio.Played.Select(w => Encoding.UTF8.GetString(w)).ToList();
         Assert.Contains(spoken, s => s.Contains("本日のゲストは冥鳴ひまりさんです。")); // index 1
         Assert.DoesNotContain(spoken, s => s.Contains("九州そら"));                     // index 0 ではない
+    }
+
+    // --- W15: アーティスト特集（ゲスト直後に 1 回・プールから選定・スキップ契約・fail-fast） ---
+
+    // 特集ランナーは具象 ArtistFeatureEngine（§18-20）。catalog/events を保持して検証する。
+    private static ArtistFeatureEngine BuildArtistRunner(
+        FakeArtistCatalog catalog, ISpotifyController spotify, List<ArtistFeatureEvent> events, int validResponses = 12)
+        => new(
+            new ScriptedLLM(Enumerable.Repeat("ずんだもん: 特集のセリフ\n四国めたん: 受けのセリフ", validResponses).ToArray()),
+            new InMemoryTTS(), new SpyAudioPlayer(), catalog, spotify, new FakeClock(),
+            onEvent: events.Add);
+
+    private static IReadOnlyList<CornerTemplate> CornersWithGuestAndFeature() => new[]
+    {
+        Corners[0], // free_talk
+        Corners[1], // letter
+        new CornerTemplate(
+            "guest", "ゲストコーナー", "音楽", CornerFormat.Guest,
+            new[] { "zundamon", "metan" }, "spotify:track:fallback", Volume: 100, PlaySeconds: 5,
+            LeadIn: "本日のゲストは{guest}さんです。"),
+        new CornerTemplate(
+            "artist_feature", "アーティスト特集", "特集", CornerFormat.ArtistFeature,
+            new[] { "zundamon", "metan" }, "spotify:track:fallback", Volume: 100, PlaySeconds: 1,
+            LeadIn: "本日は{artist}さんを特集します。",
+            ArtistFeatureParams: new ArtistFeatureParams(OutroLine: "以上、{artist}特集でした。")),
+    };
+
+    private static ProgramBlueprint FeatureBlueprint(string? artistFeatureCornerId = "artist_feature")
+        => MakeBlueprint() with { GuestCornerId = "guest", ArtistFeatureCornerId = artistFeatureCornerId };
+
+    private static List<TrackInfo> FeatureTracks(int n) =>
+        Enumerable.Range(1, n).Select(i => new TrackInfo($"spotify:track:T{i}", $"曲{i}", "米津玄師")).ToList();
+
+    [Fact]
+    public async Task Feature_SelectedFromPool_RunsAfterGuest()
+    {
+        var spotify = new FakeSpotifyController();
+        var catalog = new FakeArtistCatalog(new Dictionary<string, IReadOnlyList<TrackInfo>>
+        {
+            ["米津玄師"] = FeatureTracks(3),
+        });
+        var artistEvents = new List<ArtistFeatureEvent>();
+        var runner = BuildArtistRunner(catalog, spotify, artistEvents);
+        var h = BuildEngine(spotify, new FakeClock(), randomIndex: _ => 0, artistRunner: runner);
+
+        await h.Engine.RunAsync(
+            new ProgramPlan(FeatureBlueprint(), ProgramLength.FromCorners(2)),
+            MakeThemes(), CornersWithGuestAndFeature(), Djs,
+            guests: new[] { Sora },
+            artists: new[] { new ArtistProfile("a", "米津玄師"), new ArtistProfile("b", "あいみょん") });
+
+        Assert.Contains("米津玄師", catalog.Requested);   // randomIndex 0 → 先頭が特集準備に渡る
+        Assert.DoesNotContain(artistEvents, e => e is ArtistFeatureEvent.FeatureSkipped); // スキップしない
+        Assert.DoesNotContain(h.Events, e => e is BroadcastEvent.SegmentFailed);
+        Assert.Equal(new BroadcastEvent.BroadcastFinished(), h.Events[^1]);
+    }
+
+    [Fact]
+    public async Task Feature_EmptyPool_Skips_ButBroadcastContinues()
+    {
+        var spotify = new FakeSpotifyController();
+        var catalog = new FakeArtistCatalog();
+        var artistEvents = new List<ArtistFeatureEvent>();
+        var runner = BuildArtistRunner(catalog, spotify, artistEvents);
+        var h = BuildEngine(spotify, new FakeClock(), artistRunner: runner);
+
+        await h.Engine.RunAsync(
+            new ProgramPlan(FeatureBlueprint(), ProgramLength.FromCorners(2)),
+            MakeThemes(), CornersWithGuestAndFeature(), Djs,
+            guests: new[] { Sora }, artists: Array.Empty<ArtistProfile>());
+
+        // プール空 → artist=null で準備＝スキップ（catalog は呼ばれない）。FeatureSkipped が出て放送は継続。
+        Assert.Empty(catalog.Requested);
+        Assert.Contains(artistEvents,
+            e => e is ArtistFeatureEvent.FeatureSkipped fs && fs.Reason.Contains("E-ART-EMPTY-POOL-001"));
+        Assert.DoesNotContain(h.Events, e => e is BroadcastEvent.SegmentFailed); // スキップは SegmentFailed に載せない
+        Assert.Equal(new BroadcastEvent.BroadcastFinished(), h.Events[^1]);
+    }
+
+    [Fact]
+    public async Task Feature_TemplateAbsent_FailsFast()
+    {
+        var spotify = new FakeSpotifyController();
+        var runner = BuildArtistRunner(new FakeArtistCatalog(), spotify, new List<ArtistFeatureEvent>());
+        var h = BuildEngine(spotify, new FakeClock(), artistRunner: runner);
+
+        // corners に artist_feature template が無い（guest までしか無い）→ fail-fast。
+        await Assert.ThrowsAsync<ConfigException>(() => h.Engine.RunAsync(
+            new ProgramPlan(FeatureBlueprint(), ProgramLength.FromCorners(2)),
+            MakeThemes(), CornersWithGuest(), Djs,
+            guests: new[] { Sora }, artists: new[] { new ArtistProfile("a", "米津玄師") }));
+        Assert.Empty(spotify.Events);
+    }
+
+    [Fact]
+    public async Task Feature_CornerIdCollidesWithGuest_FailsFast()
+    {
+        var spotify = new FakeSpotifyController();
+        var runner = BuildArtistRunner(new FakeArtistCatalog(), spotify, new List<ArtistFeatureEvent>());
+        var h = BuildEngine(spotify, new FakeClock(), artistRunner: runner);
+
+        await Assert.ThrowsAsync<ConfigException>(() => h.Engine.RunAsync(
+            new ProgramPlan(FeatureBlueprint(artistFeatureCornerId: "guest"), ProgramLength.FromCorners(2)),
+            MakeThemes(), CornersWithGuestAndFeature(), Djs,
+            guests: new[] { Sora }, artists: new[] { new ArtistProfile("a", "米津玄師") }));
+        Assert.Empty(spotify.Events);
+    }
+
+    [Fact]
+    public async Task Feature_RunnerNotWired_FailsFast_WhenFeatureActive()
+    {
+        var spotify = new FakeSpotifyController();
+        var h = BuildEngine(spotify, new FakeClock()); // artistRunner: null（未配線）
+
+        await Assert.ThrowsAsync<ConfigException>(() => h.Engine.RunAsync(
+            new ProgramPlan(FeatureBlueprint(), ProgramLength.FromCorners(2)),
+            MakeThemes(), CornersWithGuestAndFeature(), Djs,
+            guests: new[] { Sora }, artists: new[] { new ArtistProfile("a", "米津玄師") }));
+        Assert.Empty(spotify.Events);
+    }
+
+    [Fact]
+    public async Task Feature_EndingDuringFeature_PlaysFeatureToCompletion_NoTrailingTalk()
+    {
+        // N=3 の特集直後は talk(index 8)。特集完了時に ED 要求 → 特集を流し切り→ED、直後 talk は流さない（§8-5 の連語ガード）。
+        var spotify = new FakeSpotifyController();
+        var catalog = new FakeArtistCatalog(new Dictionary<string, IReadOnlyList<TrackInfo>>
+        {
+            ["米津玄師"] = FeatureTracks(3),
+        });
+        var runner = BuildArtistRunner(catalog, spotify, new List<ArtistFeatureEvent>());
+        var control = new BroadcastControl();
+        var h = BuildEngine(spotify, new FakeClock(), randomIndex: _ => 0, artistRunner: runner, onEvent: e =>
+        {
+            if (e is BroadcastEvent.SegmentFinished { Index: 7, Kind: SegmentKind.ArtistFeature })
+            {
+                control.RequestEnding();
+            }
+        });
+
+        await h.Engine.RunAsync(
+            new ProgramPlan(FeatureBlueprint(), ProgramLength.FromCorners(3)),
+            MakeThemes(), CornersWithGuestAndFeature(), Djs, control,
+            guests: new[] { Sora }, artists: new[] { new ArtistProfile("a", "米津玄師") });
+
+        Assert.Contains(h.Events, e => e is BroadcastEvent.EndingRequested);
+        // 特集直後の talk(index 8)は流れない（`segment.Kind != ArtistFeature` ガードで直後 talk を keeping しない）。
+        Assert.DoesNotContain(h.Events,
+            e => e is BroadcastEvent.SegmentStarted s && s.Kind == SegmentKind.Talk && s.Index == 8);
+        Assert.DoesNotContain(h.Events, e => e is BroadcastEvent.SegmentFailed);
+        Assert.Equal(new BroadcastEvent.BroadcastFinished(), h.Events[^1]);
     }
 
     // --- 失敗注入 / トレース / ルーティング用 fake（いずれも既存 interface の実装。新 interface を作らない）。 ---

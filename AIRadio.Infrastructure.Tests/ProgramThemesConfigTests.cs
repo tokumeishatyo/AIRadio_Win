@@ -149,14 +149,20 @@ public class ProgramThemesConfigTests
     }
 
     [Fact]
-    public void Program_IgnoresArtistFeature()
+    public void Program_ReadsArtistFeatureCornerId()
     {
-        // artist_feature（W15）は v2 では無視され壊れない（guest は W14 で読むため対象外）。
-        const string yaml = MinimalProgram + "  artist_feature:\n    corner_id: feature\n";
+        // artist_feature（W15）の corner_id を読む（W14 までの「無視」を反転）。
+        const string yaml = MinimalProgram + "  artist_feature:\n    corner_id: artist_feature\n";
 
         var b = ProgramConfig.FromYaml(yaml);
-        Assert.Equal("free_talk", b.TalkCornerId);   // 正常ロード（未知キーは無視）
-        Assert.Null(b.GuestCornerId);
+        Assert.Equal("artist_feature", b.ArtistFeatureCornerId);
+    }
+
+    [Fact]
+    public void Program_ArtistFeatureOmitted_Null()
+    {
+        var b = ProgramConfig.FromYaml(MinimalProgram);
+        Assert.Null(b.ArtistFeatureCornerId);
     }
 
     [Fact]

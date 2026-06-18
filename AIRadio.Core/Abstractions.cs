@@ -28,6 +28,16 @@ public interface ITrackSearcher
     Task<bool> IsPlayableAsync(string uri, CancellationToken ct = default);
 }
 
+/// <summary>
+/// アーティストの代表曲（top-tracks）取得（Spotify Web API）。アーティスト特集（W15）で実曲を確定する。
+/// 重複・別バージョンの除外は呼び出し側（<see cref="ArtistFeatureEngine"/>）が行う。
+/// </summary>
+public interface IArtistCatalog
+{
+    /// <summary>指定アーティストの再生可能な代表曲を最大 <paramref name="limit"/> 曲返す。未解決は空リスト（throw しない）。</summary>
+    Task<IReadOnlyList<TrackInfo>> TopTracksAsync(string artistName, int limit, CancellationToken ct = default);
+}
+
 /// <summary>Spotify 再生制御（Web API）。</summary>
 public interface ISpotifyController
 {

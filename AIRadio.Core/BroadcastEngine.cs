@@ -63,13 +63,17 @@ public sealed class BroadcastEngine
     /// <summary>ゲスト選定用の乱数（count → 0..count-1。テストは決定論的に注入。W14）。</summary>
     private readonly Func<int, int> _randomIndex;
 
+    /// <summary>アーティスト特集ランナー（W15。null＝特集無効。特集有効なのに null なら preflight で fail-fast）。</summary>
+    private readonly ArtistFeatureEngine? _artistFeatureRunner;
+
     /// <param name="songPicker">冒頭曲の選曲（null・失敗時は <see cref="SongSegmentSpec.FallbackTrackUri"/> に倒す）。</param>
     /// <param name="newsAnnouncement">
     /// ニュース原稿を返すデリゲート。Core は Infrastructure（<c>NewsWeatherProvider</c>）を参照できないため
     /// （§3-4）、App が <c>ct =&gt; provider.AnnouncementAsync(ct)</c> を渡す。news 出現のたびに呼ぶ。
     /// </param>
     /// <param name="timeZone">時刻プレースホルダの解釈に使うタイムゾーン（W8。省略時は <see cref="TimeZoneInfo.Local"/>）。</param>
-    /// <param name="randomIndex">ゲスト選定用の乱数（W14。省略時は <see cref="Random.Shared"/>）。</param>
+    /// <param name="randomIndex">ゲスト・アーティスト選定用の乱数（W14/W15。省略時は <see cref="Random.Shared"/>）。</param>
+    /// <param name="artistFeatureRunner">アーティスト特集ランナー（W15。末尾 optional＝既存 positional 呼出を壊さない。特集無効なら不要）。</param>
     public BroadcastEngine(
         ThemeSequencer themeSequencer,
         CornerEngine cornerRunner,
@@ -79,7 +83,8 @@ public sealed class BroadcastEngine
         IClock clock,
         Action<BroadcastEvent>? onEvent = null,
         TimeZoneInfo? timeZone = null,
-        Func<int, int>? randomIndex = null)
+        Func<int, int>? randomIndex = null,
+        ArtistFeatureEngine? artistFeatureRunner = null)
     {
         _themeSequencer = themeSequencer;
         _cornerRunner = cornerRunner;
@@ -90,12 +95,14 @@ public sealed class BroadcastEngine
         _onEvent = onEvent;
         _timeZone = timeZone ?? TimeZoneInfo.Local;
         _randomIndex = randomIndex ?? (n => Random.Shared.Next(n));
+        _artistFeatureRunner = artistFeatureRunner;
     }
 
     /// <summary>番組を 1 本通しで実行する（単一のキャンセル可能 Task として呼ばれる前提）。</summary>
     /// <param name="plan">コーナー数 N からセグメントを生成する番組（W13）。</param>
     /// <param name="control">「ED で終了」操作ハンドル（null なら ED 終了なし）。</param>
     /// <param name="guests">ゲストコーナー（W14）のプール（省略時 空＝ゲスト無効）。放送開始時に 1 名選定する。</param>
+    /// <param name="artists">アーティスト特集（W15）のプール（省略時 空）。空でも fail-fast せず実行時にスキップ（§18-3）。放送開始時に 1 組選定。</param>
     public async Task RunAsync(
         ProgramPlan plan,
         BroadcastThemes themes,
@@ -103,6 +110,7 @@ public sealed class BroadcastEngine
         IReadOnlyList<DjProfile> djs,
         BroadcastControl? control = null,
         IReadOnlyList<DjProfile>? guests = null,
+        IReadOnlyList<ArtistProfile>? artists = null,
         CancellationToken ct = default)
     {
         // 1. preflight（fail-fast、音を出す前）: anchor DJ・talk/letter コーナー・news 読み手を blueprint から検証。
@@ -147,6 +155,33 @@ public sealed class BroadcastEngine
             selectedGuest = guestPool[_randomIndex(guestPool.Count)];
         }
 
+        // アーティスト特集の検証＋選定（W15）。実際に特集が出る放送のときだけ（特集はゲストに従属＝IncludesArtistFeature）。
+        // ゲストと異なり、プール空でも fail-fast しない（実行時に E-ART-EMPTY-POOL-001 でスキップ＝§18-3）。
+        ArtistProfile? selectedArtist = null;
+        var artistPool = artists ?? Array.Empty<ArtistProfile>();
+        if (plan.Blueprint.ArtistFeatureCornerId is string featureCornerId && plan.IncludesArtistFeature)
+        {
+            if (corners.All(c => c.Id != featureCornerId))
+            {
+                throw ConfigException.MissingField($"program.artist_feature.corner_id に未定義のコーナー: {featureCornerId}");
+            }
+            // 特集コーナー id はトーク／お便り／ゲストと別物でなければならない。
+            if (featureCornerId == plan.Blueprint.TalkCornerId || featureCornerId == plan.Blueprint.LetterCornerId
+                || featureCornerId == plan.Blueprint.GuestCornerId)
+            {
+                throw ConfigException.MissingField($"program.artist_feature.corner_id が talk/letter/guest と重複: {featureCornerId}");
+            }
+            if (_artistFeatureRunner is null)
+            {
+                throw ConfigException.MissingField("artist_feature 有効だが ArtistFeatureEngine が未配線です");
+            }
+            // プール空（未生成）は throw せず選定をスキップ → 実行時に特集スキップ（§8-4）。
+            if (artistPool.Count > 0)
+            {
+                selectedArtist = artistPool[_randomIndex(artistPool.Count)];
+            }
+        }
+
         // 当日の編成（先頭＝メイン）を解決（W13.5。空・未定義 id は fail-fast）。OP/ED/トークを仕切る。
         var castDjIds = plan.Blueprint.WeeklyCast.DjIds(_clock.Now, _timeZone);
         if (castDjIds.Count == 0)
@@ -161,7 +196,7 @@ public sealed class BroadcastEngine
         var ledger = new PreparationLedger();
         try
         {
-            await BroadcastAsync(plan, themes, corners, djs, anchor, cast, main, selectedGuest, control, ledger, ct).ConfigureAwait(false);
+            await BroadcastAsync(plan, themes, corners, djs, anchor, cast, main, selectedGuest, selectedArtist, control, ledger, ct).ConfigureAwait(false);
         }
         finally
         {
@@ -180,6 +215,7 @@ public sealed class BroadcastEngine
         IReadOnlyList<DjProfile> cast,
         DjProfile main,
         DjProfile? guest,
+        ArtistProfile? artist,
         BroadcastControl? control,
         PreparationLedger ledger,
         CancellationToken ct)
@@ -203,7 +239,7 @@ public sealed class BroadcastEngine
                 {
                     return; // 有限番組の末尾（ED の次）に到達。
                 }
-                StartPreparation(index, seg, corners, djs, songContext, castDjIds, firstTalkIndex, greeting, plan.Blueprint.GuestCornerId, guest, ledger, ct);
+                StartPreparation(index, seg, corners, djs, songContext, castDjIds, firstTalkIndex, greeting, plan.Blueprint.GuestCornerId, guest, artist, ledger, ct);
             }
         }
 
@@ -236,7 +272,9 @@ public sealed class BroadcastEngine
                 {
                     _onEvent?.Invoke(new BroadcastEvent.EndingRequested());
                     var edIndex = index + 1;
-                    if (plan.Segment(edIndex) is { Kind: SegmentKind.Talk, CornerId: var cornerId } nextTalk
+                    // アーティスト特集の直後は「直後トークを流す」分岐に入らず ED 直行（特集後に余分なトークを挟まない。§8-5）。
+                    if (segment.Kind != SegmentKind.ArtistFeature
+                        && plan.Segment(edIndex) is { Kind: SegmentKind.Talk, CornerId: var cornerId } nextTalk
                         && cornerId == plan.Blueprint.TalkCornerId
                         && ledger.IsCornerPrepared(edIndex))
                     {
@@ -279,6 +317,7 @@ public sealed class BroadcastEngine
         string? greeting,
         string? guestCornerId,
         DjProfile? guest,
+        ArtistProfile? artist,
         PreparationLedger ledger,
         CancellationToken ct)
     {
@@ -317,10 +356,31 @@ public sealed class BroadcastEngine
                 ledger.AddNews(index, _newsAnnouncement(newsToken));
                 break;
 
+            case SegmentKind.ArtistFeature:
+                // アーティスト特集（W15）。重い準備（top-tracks + 複数台本 + 全行 TTS）をローリング窓で先行起動。
+                // 直前の長いゲスト talk がバッファになり窓 2 で間に合う（§8-3）。lead-in は corner から直接渡す（CornerContext は talk 専用）。
+                var featureCorner = corners.First(c => c.Id == segment.CornerId);
+                var featureToken = ledger.BeginPreparation(index, ct);
+                ledger.AddArtistFeature(
+                    index, PrepareArtistFeatureAsync(featureCorner, artist, djs, castDjIds, featureCorner.LeadIn, featureToken));
+                break;
+
             case SegmentKind.Opening:
             case SegmentKind.Ending:
                 break; // 準備なし
         }
+    }
+
+    /// <summary>アーティスト特集の準備をラップ（runner 未配線は fail-fast）。準備は無音なので失敗時の pause は不要。</summary>
+    private Task<PreparedArtistFeature> PrepareArtistFeatureAsync(
+        CornerTemplate corner, ArtistProfile? artist, IReadOnlyList<DjProfile> djs,
+        IReadOnlyList<string> castDjIds, string? leadIn, CancellationToken ct)
+    {
+        if (_artistFeatureRunner is null)
+        {
+            throw ConfigException.MissingField("artist_feature 有効だが ArtistFeatureEngine が未配線です");
+        }
+        return _artistFeatureRunner.PrepareAsync(corner, artist, djs, castDjIds, leadIn, ct);
     }
 
     /// <summary>
@@ -488,6 +548,21 @@ public sealed class BroadcastEngine
                     .ConfigureAwait(false);
                 break;
             }
+
+            case SegmentKind.ArtistFeature:
+            {
+                // アーティスト特集（W15）。先行準備した PreparedArtistFeature を実行。スキップ（プール空 / K≤2）は
+                // ランナーが内部で FeatureSkipped を出して何も流さない（SegmentFailed には載せない＝§8-4）。
+                var featureTask = ledger.ArtistFeatureTask(index)
+                    ?? throw BroadcastException.SegmentFailed($"artist_feature: 準備タスクがありません（index {index}）");
+                var preparedFeature = await featureTask.ConfigureAwait(false);
+                if (_artistFeatureRunner is null)
+                {
+                    throw BroadcastException.SegmentFailed($"artist_feature: ランナー未配線（index {index}）");
+                }
+                await _artistFeatureRunner.RunAsync(preparedFeature, djs, ct).ConfigureAwait(false);
+                break;
+            }
         }
     }
 
@@ -522,6 +597,7 @@ public sealed class BroadcastEngine
         private readonly Dictionary<int, Task<TrackInfo>> _songTasks = new();
         private readonly Dictionary<int, Task<PreparedCorner>> _cornerTasks = new();
         private readonly Dictionary<int, Task<string>> _newsTasks = new();
+        private readonly Dictionary<int, Task<PreparedArtistFeature>> _artistFeatureTasks = new();
         private readonly Dictionary<int, CancellationTokenSource> _ctsByIndex = new();
         private readonly HashSet<int> _preparedCorners = new();
 
@@ -536,10 +612,12 @@ public sealed class BroadcastEngine
         public void AddSong(int index, Task<TrackInfo> task) { lock (_lock) { _songTasks[index] = task; } }
         public void AddCorner(int index, Task<PreparedCorner> task) { lock (_lock) { _cornerTasks[index] = task; } }
         public void AddNews(int index, Task<string> task) { lock (_lock) { _newsTasks[index] = task; } }
+        public void AddArtistFeature(int index, Task<PreparedArtistFeature> task) { lock (_lock) { _artistFeatureTasks[index] = task; } }
 
         public Task<TrackInfo>? SongTask(int index) { lock (_lock) { return _songTasks.GetValueOrDefault(index); } }
         public Task<PreparedCorner>? CornerTask(int index) { lock (_lock) { return _cornerTasks.GetValueOrDefault(index); } }
         public Task<string>? NewsTask(int index) { lock (_lock) { return _newsTasks.GetValueOrDefault(index); } }
+        public Task<PreparedArtistFeature>? ArtistFeatureTask(int index) { lock (_lock) { return _artistFeatureTasks.GetValueOrDefault(index); } }
 
         /// <summary>トーク準備が**成功完了**したことを記録（ED 判定の「直後トークが準備済みか」用）。</summary>
         public void MarkCornerPrepared(int index) { lock (_lock) { _preparedCorners.Add(index); } }
@@ -578,6 +656,7 @@ public sealed class BroadcastEngine
                 _songTasks.Remove(index);
                 _cornerTasks.Remove(index);
                 _newsTasks.Remove(index);
+                _artistFeatureTasks.Remove(index);
                 _preparedCorners.Remove(index);
                 _ctsByIndex.Remove(index, out cts);
             }
@@ -594,14 +673,16 @@ public sealed class BroadcastEngine
             List<CancellationTokenSource> ctsList;
             lock (_lock)
             {
-                tasks = new List<Task>(_songTasks.Count + _cornerTasks.Count + _newsTasks.Count);
+                tasks = new List<Task>(_songTasks.Count + _cornerTasks.Count + _newsTasks.Count + _artistFeatureTasks.Count);
                 tasks.AddRange(_songTasks.Values);
                 tasks.AddRange(_cornerTasks.Values);
                 tasks.AddRange(_newsTasks.Values);
+                tasks.AddRange(_artistFeatureTasks.Values);
                 ctsList = new List<CancellationTokenSource>(_ctsByIndex.Values);
                 _songTasks.Clear();
                 _cornerTasks.Clear();
                 _newsTasks.Clear();
+                _artistFeatureTasks.Clear();
                 _preparedCorners.Clear();
                 _ctsByIndex.Clear();
             }

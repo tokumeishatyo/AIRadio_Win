@@ -185,6 +185,88 @@ public class ProgramPlanTests
         Assert.Equal(new[] { Op, Song, Tf, Tf, Tl, News, Ed }, Enumerate(plan, 20)); // W13 の N=2 と同じ
         Assert.Equal(7, plan.TotalSegmentCount);
     }
+
+    // --- W15: アーティスト特集挿入（ゲスト直後 = body 5 に 1 回。特集はゲストに従属） ---
+
+    private static (SegmentKind, string?) Tfeat => (SegmentKind.ArtistFeature, "artist_feature");
+
+    private static ProgramBlueprint FeatureBlueprint() =>
+        Blueprint() with { GuestCornerId = "guest", ArtistFeatureCornerId = "artist_feature" };
+
+    private static ProgramBlueprint FeatureOnlyBlueprint() =>
+        Blueprint() with { ArtistFeatureCornerId = "artist_feature" }; // guest 無効
+
+    [Fact]
+    public void Feature_N2_AfterGuest_TotalPlus2()
+    {
+        var plan = new ProgramPlan(FeatureBlueprint(), ProgramLength.FromCorners(2));
+
+        Assert.True(plan.IncludesArtistFeature);
+        Assert.Equal(new[] { Op, Song, Tf, Tf, Tl, News, Tg, Tfeat, Ed }, Enumerate(plan, 20));
+        Assert.Equal(9, plan.TotalSegmentCount);            // ゲスト/特集なし 7 → +2
+        Assert.Equal(SegmentKind.ArtistFeature, plan.Segment(7)!.Kind);
+        Assert.Equal("artist_feature", plan.Segment(7)!.CornerId);
+        Assert.False(plan.Segment(7)!.Critical);            // 特集は常に非 critical
+    }
+
+    [Fact]
+    public void Feature_N3_Odd_TrailingTalkShiftedByTwoInsertions()
+    {
+        var plan = new ProgramPlan(FeatureBlueprint(), ProgramLength.FromCorners(3));
+
+        Assert.Equal(new[] { Op, Song, Tf, Tf, Tl, News, Tg, Tfeat, Tf, Ed }, Enumerate(plan, 20));
+        Assert.Equal(10, plan.TotalSegmentCount);           // 8 → +2
+    }
+
+    [Fact]
+    public void Feature_N4_OnlyAfterFirstNews_NotSecond()
+    {
+        var plan = new ProgramPlan(FeatureBlueprint(), ProgramLength.FromCorners(4));
+
+        Assert.Equal(
+            new[] { Op, Song, Tf, Tf, Tl, News, Tg, Tfeat, Tf, Tf, Tl, News, Ed }, Enumerate(plan, 30));
+        Assert.Equal(1, Enumerate(plan, 30).Count(s => s == Tfeat)); // 特集は 1 回だけ
+        Assert.Equal(4, Enumerate(plan, 30).Count(s => s == Tf));    // free_talk は N=4 のまま（特集は N に数えない）
+        Assert.Equal(13, plan.TotalSegmentCount);           // 11 → +2
+    }
+
+    [Fact]
+    public void Feature_N5_TrailingTalkShifted()
+    {
+        var plan = new ProgramPlan(FeatureBlueprint(), ProgramLength.FromCorners(5));
+
+        Assert.Equal(
+            new[] { Op, Song, Tf, Tf, Tl, News, Tg, Tfeat, Tf, Tf, Tl, News, Tf, Ed }, Enumerate(plan, 30));
+    }
+
+    [Fact]
+    public void Feature_Endless_InsertedOnce_NullTotal()
+    {
+        var plan = new ProgramPlan(FeatureBlueprint(), ProgramLength.Endless);
+
+        Assert.Equal(
+            new[] { Op, Song, Tf, Tf, Tl, News, Tg, Tfeat }, Enumerate(plan, 8));
+        Assert.Equal(1, Enumerate(plan, 200).Count(s => s == Tfeat)); // 無限ループでも特集は 1 回
+        Assert.Null(plan.TotalSegmentCount);
+    }
+
+    [Fact]
+    public void Feature_RequiresGuest_NoneWhenGuestDisabled()
+    {
+        var plan = new ProgramPlan(FeatureOnlyBlueprint(), ProgramLength.FromCorners(4));
+
+        Assert.False(plan.IncludesArtistFeature);                       // ゲスト無効＝特集も従属して無効
+        Assert.DoesNotContain(Tfeat, Enumerate(plan, 30));
+    }
+
+    [Fact]
+    public void Feature_N1_NoNews_NoGuestNoFeature()
+    {
+        var plan = new ProgramPlan(FeatureBlueprint(), ProgramLength.FromCorners(1));
+
+        Assert.Equal(new[] { Op, Song, Tf, Ed }, Enumerate(plan, 20)); // news が無いのでゲストも特集もなし
+        Assert.Equal(4, plan.TotalSegmentCount);
+    }
 }
 
 /// <summary>W13 番組長の文字列表現・解析（Mac <c>ProgramLength</c> パリティ）。</summary>

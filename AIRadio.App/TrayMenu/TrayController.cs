@@ -34,9 +34,16 @@ internal sealed class TrayController
     private readonly NativeMenuItem _stateItem = new("停止中") { IsEnabled = false };
     private readonly NativeMenuItem _toggleItem = new("放送を開始");
     private readonly NativeMenuItem _endingItem = new("ED で終了") { IsEnabled = false };
+    private readonly NativeMenuItem _generateArtistsItem = new("アーティスト一覧を生成");
 
     /// <summary>放送中の操作（「ED で終了」）。開始時にセット、Idle で破棄（UI スレッドのみ触る）。</summary>
     private BroadcastControl? _activeControl;
+
+    // アーティスト一覧生成（W15 §9-3）の状態は App 側で持つ（BroadcastSession は拡張しない＝§18-13）。すべて UI スレッドのみが触る。
+    private bool _isBroadcasting;
+    private bool _isGeneratingArtists;
+    private Task? _generateTask;
+    private CancellationTokenSource? _generateCts;
 
     public TrayController(IClassicDesktopStyleApplicationLifetime desktop)
     {
@@ -47,6 +54,7 @@ internal sealed class TrayController
 
         _toggleItem.Click += (_, _) => Toggle();
         _endingItem.Click += (_, _) => RequestEnding();
+        _generateArtistsItem.Click += (_, _) => GenerateArtists();
         var quitItem = new NativeMenuItem("終了");
         quitItem.Click += (_, _) => Quit();
 
@@ -56,6 +64,7 @@ internal sealed class TrayController
         menu.Add(_endingItem);
         menu.Add(new NativeMenuItemSeparator());
         menu.Add(BuildLengthMenuItem());
+        menu.Add(_generateArtistsItem);
         menu.Add(new NativeMenuItemSeparator());
         menu.Add(quitItem);
 
@@ -73,6 +82,10 @@ internal sealed class TrayController
 
     private void Toggle()
     {
+        if (_isGeneratingArtists)
+        {
+            return; // 生成中は放送開始を受け付けない（相互排他。§9-3。ボタンも無効化済みだが二重ガード）。
+        }
         if (_session.CurrentState == BroadcastSession.State.Broadcasting)
         {
             _session.Stop();
@@ -83,6 +96,66 @@ internal sealed class TrayController
             _activeControl = control;
             _session.Start(ct => _broadcast.RunAsync(ct, control));
         }
+    }
+
+    /// <summary>
+    /// 「アーティスト一覧を生成」（W15 §9-3）。放送停止時のみ。LLM 生成 + Spotify 実在検証で artists.yaml を原子的に上書き。
+    /// 背景 Task で実行し、UI 反映は <see cref="Dispatcher.UIThread"/> へマーシャル。生成と放送は相互排他。
+    /// </summary>
+    private void GenerateArtists()
+    {
+        if (_isBroadcasting || _isGeneratingArtists)
+        {
+            return;
+        }
+        _isGeneratingArtists = true;
+        _stateItem.Header = "アーティスト生成中…";
+        _generateArtistsItem.Header = "アーティスト一覧を生成中…";
+        RefreshMenuEnablement();
+
+        var cts = new CancellationTokenSource();
+        _generateCts = cts;
+        _generateTask = Task.Run(async () =>
+        {
+            try
+            {
+                var count = await _broadcast.GenerateArtistListAsync(cts.Token).ConfigureAwait(false);
+                Dispatcher.UIThread.Post(() => FinishGenerating($"アーティスト一覧を生成しました（{count} 組）。"));
+            }
+            catch (OperationCanceledException)
+            {
+                Dispatcher.UIThread.Post(() => FinishGenerating("アーティスト生成を中止しました。"));
+            }
+            catch (Exception ex)
+            {
+                var detail = ex is IRadioError re ? $"生成エラー [{re.Code}]: {ex.Message}" : $"生成エラー: {ex.Message}";
+                _log.Log(detail);
+                Dispatcher.UIThread.Post(() => FinishGenerating("アーティスト生成に失敗しました（artists.yaml は変更なし）。"));
+            }
+        });
+    }
+
+    /// <summary>生成の完了/失敗/中止の後始末（UI スレッド）。状態を戻し、メニュー活性を更新する。</summary>
+    private void FinishGenerating(string message)
+    {
+        _isGeneratingArtists = false;
+        _generateCts?.Dispose();
+        _generateCts = null;
+        _generateTask = null;
+        _generateArtistsItem.Header = "アーティスト一覧を生成";
+        _stateItem.Header = _isBroadcasting ? "放送中…" : "停止中";
+        _log.Log(message);
+        RefreshMenuEnablement();
+    }
+
+    /// <summary>
+    /// メニュー活性を命令的に更新（Avalonia に validateMenuItem 相当がないため＝§18-14）。
+    /// 生成ボタン: 放送停止 かつ 非生成中のみ有効。放送開始: 放送中 または 非生成中のみ有効（生成中は無効＝相互排他）。
+    /// </summary>
+    private void RefreshMenuEnablement()
+    {
+        _generateArtistsItem.IsEnabled = !_isBroadcasting && !_isGeneratingArtists;
+        _toggleItem.IsEnabled = _isBroadcasting || !_isGeneratingArtists;
     }
 
     /// <summary>「ED で終了」: 現セグメント（+ 準備済みの直後トーク）を流したら ED で締める（仕様 w13 §3-4）。</summary>
@@ -139,6 +212,13 @@ internal sealed class TrayController
     /// <summary>graceful shutdown: 放送停止 → 後始末 pause 完了待ち → 終了（鳴らしっぱなし防止 §3-1）。</summary>
     private async Task ShutdownAsync()
     {
+        // 進行中のアーティスト生成があればキャンセルして待つ（一時ファイルを残さない・rename とシャットダウンの競合回避。§9-3）。
+        _generateCts?.Cancel();
+        var generateTask = _generateTask;
+        if (generateTask is not null)
+        {
+            try { await generateTask.ConfigureAwait(false); } catch { /* 中止/失敗は無視（best-effort） */ }
+        }
         await _session.StopAndWaitAsync().ConfigureAwait(false);
         await Dispatcher.UIThread.InvokeAsync(() =>
         {
@@ -156,17 +236,20 @@ internal sealed class TrayController
         switch (state)
         {
             case BroadcastSession.State.Broadcasting:
+                _isBroadcasting = true;
                 _toggleItem.Header = "放送を停止";
                 _stateItem.Header = "放送中…";
                 _endingItem.IsEnabled = true;
                 break;
             case BroadcastSession.State.Idle:
+                _isBroadcasting = false;
                 _toggleItem.Header = "放送を開始";
                 _stateItem.Header = "停止中";
                 _endingItem.IsEnabled = false;
                 _activeControl = null; // 自走完走・停止のいずれでも確実に破棄（唯一の権威ある状態コールバック）。
                 break;
         }
+        RefreshMenuEnablement();
     }
 
     private static WindowIcon LoadIcon()

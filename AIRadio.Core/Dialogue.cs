@@ -49,11 +49,28 @@ public sealed record CornerTemplate(
     int Volume = 85,
     int PlaySeconds = 0,
     IReadOnlyList<string>? ThemePool = null,
-    string? LeadIn = null)
+    string? LeadIn = null,
+    ArtistFeatureParams? ArtistFeatureParams = null)
 {
     /// <summary>台本の目標文字数（5 分 × 320 字/分 ≒ 1600 字）。</summary>
     public int TargetCharacters => TargetMinutes * CharsPerMinute;
 }
+
+/// <summary>
+/// アーティスト特集コーナーの追加パラメータ（W15。<see cref="CornerFormat.ArtistFeature"/> のときのみ <c>corners.yaml</c> から構築）。
+/// パート別の目標文字数と固定の締め文を持つ。<c>OutroLine</c> の <c>{artist}</c> は準備時に実名展開する。
+/// </summary>
+/// <param name="IntroTargetChars">導入パートの目標文字数。</param>
+/// <param name="GroupIntroTargetChars">グループ紹介パートの目標文字数。</param>
+/// <param name="CommentTargetChars">感想（1 回目・長め）の目標文字数。</param>
+/// <param name="CommentShortTargetChars">感想（2 回目以降・短め）の目標文字数。<c>&lt; CommentTargetChars</c> をロード時に検証（W15 §13）。</param>
+/// <param name="OutroLine">固定の締め（LLM 生成しない。<c>{artist}</c> を含む）。</param>
+public sealed record ArtistFeatureParams(
+    int IntroTargetChars = 200,
+    int GroupIntroTargetChars = 320,
+    int CommentTargetChars = 400,
+    int CommentShortTargetChars = 240,
+    string OutroLine = "以上、{artist}特集でした。");
 
 /// <summary>
 /// コーナー準備（<see cref="CornerEngine.PrepareAsync"/>）に渡す番組内コンテキスト（W13.5 §3）。

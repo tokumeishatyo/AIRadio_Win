@@ -142,3 +142,26 @@ public sealed class BroadcastException : RadioException
     public static BroadcastException SegmentFailed(string detail) =>
         new("E-RTM-SEGMENT-FAILED-001", $"放送セグメントが中断しました: {detail}");
 }
+
+/// <summary>
+/// アーティスト特集（ART）の実行時スキップ用の安定コードと理由文字列（W15）。
+/// <b>これらは throw しない</b>（fail-tolerant・<see cref="ArtistFeatureEvent.FeatureSkipped"/> のログ用。
+/// <see cref="BroadcastException.SegmentFailed"/> にも載せない）。Mac は <c>reason</c> 文字列にコードを埋め込むだけで
+/// <c>RadioError</c> を投げないため、Win も <see cref="RadioException"/> 派生を作らず定数 + 理由ビルダで表す（spec §18-27、§3-3）。
+/// </summary>
+public static class ArtistFeatureErrors
+{
+    /// <summary>プール空（artists.yaml 未生成）で特集スキップ。</summary>
+    public const string EmptyPool = "E-ART-EMPTY-POOL-001";
+
+    /// <summary>再生可能曲が最低 3 曲未満（K ≤ 2）で特集スキップ。</summary>
+    public const string InsufficientTracks = "E-ART-INSUFFICIENT-TRACKS-001";
+
+    /// <summary>プール空スキップの理由文字列（コードを含む）。</summary>
+    public static string EmptyPoolReason() =>
+        $"{EmptyPool}: アーティストが未生成です（artists.yaml が空）";
+
+    /// <summary>曲不足スキップの理由文字列（コードを含む）。</summary>
+    public static string InsufficientTracksReason(int count, int min) =>
+        $"{InsufficientTracks}: 再生可能曲が {count} 曲（最低 {min} 必要）";
+}
