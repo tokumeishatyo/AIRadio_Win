@@ -95,6 +95,9 @@ internal sealed class BroadcastComposition
             var newsProvider = new LlmNewsScriptProvider(
                 news, weather, llm, newsPersona, research.LlmScript, research.AnnouncementTemplate);
             var songPicker = new SongPicker(llm, searcher, llmConfig.Temperature);
+            // 長期記憶（W18）。journal.local.yaml（gitignore・人為削除で即クリア）。要約は temp 0.6（Mac 一致）。
+            var journalStore = new YamlJournalStore(Path.Combine(_configDir, "journal.local.yaml"));
+            var journalSummarizer = new JournalSummarizer(llm);
 
             var engine = new BroadcastEngine(
                 themeSequencer,
@@ -104,7 +107,9 @@ internal sealed class BroadcastComposition
                 spotify,
                 clock,
                 onEvent: e => _log.Log(FormatBroadcastEvent(e)),
-                artistFeatureRunner: artistFeatureEngine);
+                artistFeatureRunner: artistFeatureEngine,
+                journalStore: journalStore,
+                journalSummarizer: journalSummarizer);
 
             var lengthLabel = plan.Length.IsEndless ? "エンドレス" : $"トーク{plan.Length.Corners}本";
             var countLabel = plan.TotalSegmentCount is int total ? $"・{total} セグメント" : "";

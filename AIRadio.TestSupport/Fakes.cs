@@ -215,6 +215,50 @@ public sealed class FakeArtistCatalog : IArtistCatalog
     }
 }
 
+/// <summary>
+/// メモリ上の <see cref="IJournalStore"/>（長期記憶、W18）。保存回数（<see cref="SaveCount"/>）と最新ジャーナル
+/// （<see cref="Journal"/>）を記録する。初期ジャーナルを与えて「前回の振り返り」読み込みを再現できる。
+/// </summary>
+public sealed class InMemoryJournalStore : IJournalStore
+{
+    private readonly object _lock = new();
+    private StationJournal _journal;
+    private int _saveCount;
+
+    public InMemoryJournalStore(StationJournal? initial = null) => _journal = initial ?? StationJournal.Empty;
+
+    /// <summary>最後に保存された（または初期の）ジャーナル。</summary>
+    public StationJournal Journal { get { lock (_lock) { return _journal; } } }
+
+    /// <summary><see cref="Save"/> が呼ばれた回数。</summary>
+    public int SaveCount { get { lock (_lock) { return _saveCount; } } }
+
+    public StationJournal Load() { lock (_lock) { return _journal; } }
+
+    public void Save(StationJournal journal) { lock (_lock) { _journal = journal; _saveCount++; } }
+}
+
+/// <summary>
+/// <see cref="Load"/> が必ず throw する <see cref="IJournalStore"/>（W18。壊れファイルを <c>BroadcastEngine</c> が握り潰して
+/// 空に倒す経路の検証用）。<see cref="Save"/> された内容は記録する（catch→Empty から積み直したことを検証できる）。
+/// </summary>
+public sealed class ThrowingJournalStore : IJournalStore
+{
+    private readonly object _lock = new();
+    private StationJournal? _saved;
+    private int _saveCount;
+
+    /// <summary>最後に <see cref="Save"/> された（catch→Empty から積み直した）ジャーナル。未保存なら null。</summary>
+    public StationJournal? Saved { get { lock (_lock) { return _saved; } } }
+
+    /// <summary><see cref="Save"/> が呼ばれた回数。</summary>
+    public int SaveCount { get { lock (_lock) { return _saveCount; } } }
+
+    public StationJournal Load() => throw new InvalidOperationException("corrupt journal");
+
+    public void Save(StationJournal journal) { lock (_lock) { _saved = journal; _saveCount++; } }
+}
+
 /// <summary>ログメッセージを記録する IRadioLog（テスト用）。</summary>
 public sealed class CollectingRadioLog : IRadioLog
 {

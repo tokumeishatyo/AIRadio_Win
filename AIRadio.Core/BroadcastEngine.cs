@@ -66,6 +66,12 @@ public sealed class BroadcastEngine
     /// <summary>アーティスト特集ランナー（W15。null＝特集無効。特集有効なのに null なら preflight で fail-fast）。</summary>
     private readonly ArtistFeatureEngine? _artistFeatureRunner;
 
+    /// <summary>長期記憶の永続化（W18。null＝ジャーナル無効。<see cref="_journalSummarizer"/> と両方揃ったときだけ保存・注入する）。</summary>
+    private readonly IJournalStore? _journalStore;
+
+    /// <summary>ハイライト要約器（W18。null＝ジャーナル無効）。</summary>
+    private readonly JournalSummarizer? _journalSummarizer;
+
     /// <param name="songPicker">冒頭曲の選曲（null・失敗時は <see cref="SongSegmentSpec.FallbackTrackUri"/> に倒す）。</param>
     /// <param name="newsAnnouncement">
     /// ニュース原稿を返すデリゲート。Core は Infrastructure（<c>NewsWeatherProvider</c>）を参照できないため
@@ -74,6 +80,8 @@ public sealed class BroadcastEngine
     /// <param name="timeZone">時刻プレースホルダの解釈に使うタイムゾーン（W8。省略時は <see cref="TimeZoneInfo.Local"/>）。</param>
     /// <param name="randomIndex">ゲスト・アーティスト選定用の乱数（W14/W15。省略時は <see cref="Random.Shared"/>）。</param>
     /// <param name="artistFeatureRunner">アーティスト特集ランナー（W15。末尾 optional＝既存 positional 呼出を壊さない。特集無効なら不要）。</param>
+    /// <param name="journalStore">長期記憶の永続化（W18。末尾 optional。null なら保存・注入なし＝従来挙動）。</param>
+    /// <param name="journalSummarizer">ハイライト要約器（W18。末尾 optional。<paramref name="journalStore"/> と両方揃ったときだけ保存する）。</param>
     public BroadcastEngine(
         ThemeSequencer themeSequencer,
         CornerEngine cornerRunner,
@@ -84,7 +92,9 @@ public sealed class BroadcastEngine
         Action<BroadcastEvent>? onEvent = null,
         TimeZoneInfo? timeZone = null,
         Func<int, int>? randomIndex = null,
-        ArtistFeatureEngine? artistFeatureRunner = null)
+        ArtistFeatureEngine? artistFeatureRunner = null,
+        IJournalStore? journalStore = null,
+        JournalSummarizer? journalSummarizer = null)
     {
         _themeSequencer = themeSequencer;
         _cornerRunner = cornerRunner;
@@ -96,6 +106,8 @@ public sealed class BroadcastEngine
         _timeZone = timeZone ?? TimeZoneInfo.Local;
         _randomIndex = randomIndex ?? (n => Random.Shared.Next(n));
         _artistFeatureRunner = artistFeatureRunner;
+        _journalStore = journalStore;
+        _journalSummarizer = journalSummarizer;
     }
 
     /// <summary>番組を 1 本通しで実行する（単一のキャンセル可能 Task として呼ばれる前提）。</summary>
@@ -226,6 +238,8 @@ public sealed class BroadcastEngine
         var firstTalkIndex = FirstTalkIndex(plan);
         // 冒頭コーナーの時刻連動の挨拶語（準備時点で解決。再生まで数分なので時間帯ズレはほぼ無い、W13.5 §3）。
         var greeting = TimePhrases.Values(_clock.Now, themes.Greetings, _timeZone).GetValueOrDefault("greeting");
+        // 前回までの振り返り（長期記憶。当週のハイライトを冒頭コーナーの準備にのみ渡す。読み込み失敗は無視＝fail-tolerant。W18 §5/§6）。
+        var journalContext = JournalContextFromCurrentWeek();
 
         // ローリング準備の起動（単一消費者なので進捗はローカル変数で追う）。
         var preparationStartedThrough = -1;
@@ -239,7 +253,7 @@ public sealed class BroadcastEngine
                 {
                     return; // 有限番組の末尾（ED の次）に到達。
                 }
-                StartPreparation(index, seg, corners, djs, songContext, castDjIds, firstTalkIndex, greeting, plan.Blueprint.GuestCornerId, guest, artist, ledger, ct);
+                StartPreparation(index, seg, corners, djs, songContext, castDjIds, firstTalkIndex, greeting, journalContext, plan.Blueprint.GuestCornerId, guest, artist, ledger, ct);
             }
         }
 
@@ -303,7 +317,73 @@ public sealed class BroadcastEngine
 
         // 正常完走: 各セグメントも自前で pause するが、エンジンでも重ねて保証してから完了を通知。
         try { await _spotify.PauseAsync(ct).ConfigureAwait(false); } catch { /* best-effort */ }
+        // 長期記憶（W18 §5）: 正常終了した回のみハイライトを記録（停止/キャンセルは catch で抜けてここに来ない＝記録しない）。
+        await SaveJournalAsync(guest, artist, ct).ConfigureAwait(false);
         _onEvent?.Invoke(new BroadcastEvent.BroadcastFinished());
+    }
+
+    /// <summary>
+    /// 開始時にジャーナルを読み、当週のハイライトを冒頭コーナー用の振り返り文へ（W18 §5/§6）。
+    /// store 未注入・読み込み失敗・当週エントリ無しはいずれも空文字（注入なし。完全 fail-tolerant）。
+    /// </summary>
+    private string JournalContextFromCurrentWeek()
+    {
+        if (_journalStore is null)
+        {
+            return "";
+        }
+        StationJournal journal;
+        try
+        {
+            journal = _journalStore.Load();
+        }
+        catch
+        {
+            return ""; // 壊れファイル・IO 失敗は握り潰して空に倒す（長期記憶は事故ゼロ系）。
+        }
+        return JournalContext(journal.EntriesForCurrentWeek(_clock.Now, _timeZone));
+    }
+
+    /// <summary>当週のハイライト群を冒頭コーナー用の振り返り文へ（直近 3 件まで・<c>・</c> 連結。空なら ""）。Mac <c>journalContext(from:)</c> 移植。</summary>
+    private static string JournalContext(IReadOnlyList<JournalEntry> entries)
+    {
+        var recent = entries.Count <= 3 ? entries : entries.Skip(entries.Count - 3).ToList();
+        return recent.Count == 0 ? "" : string.Join("\n", recent.Select(e => $"・{e.Highlight}"));
+    }
+
+    /// <summary>
+    /// 番組終了時（正常終了のみ）に、その回のハイライトを要約してジャーナルへ追記（W18 §2/§5）。
+    /// 完全 fail-tolerant: 要約・保存の失敗は放送に影響させない。ゲストも特集も無い回は記録しない（確定 A）。
+    /// </summary>
+    private async Task SaveJournalAsync(DjProfile? guest, ArtistProfile? artist, CancellationToken ct)
+    {
+        if (_journalStore is null || _journalSummarizer is null)
+        {
+            return; // ジャーナル無効。
+        }
+        var digest = new BroadcastDigest(DateString(_clock.Now, _timeZone), guest?.Name, artist?.Name);
+        if (!digest.HasContent)
+        {
+            return; // ゲストも特集も無い回は記録しない（確定 A）。
+        }
+        var highlight = await _journalSummarizer.SummarizeAsync(digest, ct).ConfigureAwait(false);
+        if (highlight.Length == 0)
+        {
+            return; // 要約が空（素材なしフォールバック）なら記録しない。
+        }
+        StationJournal current;
+        try { current = _journalStore.Load(); }
+        catch { current = StationJournal.Empty; } // 壊れていても新規に積む（前週分の喪失は許容＝事故ゼロ系）。
+        var updated = current.Appended(new JournalEntry(digest.Date, highlight), _clock.Now, _timeZone);
+        try { _journalStore.Save(updated); }
+        catch { /* 保存失敗は放送に影響させない（fail-tolerant）。 */ }
+    }
+
+    /// <summary>放送日の日付文字列 "YYYY-MM-DD"（指定タイムゾーンで解釈）。Mac <c>dateString</c> 移植。</summary>
+    private static string DateString(DateTimeOffset now, TimeZoneInfo timeZone)
+    {
+        var local = TimeZoneInfo.ConvertTime(now, timeZone).DateTime;
+        return $"{local.Year:D4}-{local.Month:D2}-{local.Day:D2}";
     }
 
     private void StartPreparation(
@@ -315,6 +395,7 @@ public sealed class BroadcastEngine
         IReadOnlyList<string> castDjIds,
         int firstTalkIndex,
         string? greeting,
+        string journalContext,
         string? guestCornerId,
         DjProfile? guest,
         ArtistProfile? artist,
@@ -327,7 +408,7 @@ public sealed class BroadcastEngine
                 // corner は preflight 済み（必ず見つかる）。準備（LLM 台本 + 全行 TTS）を裏で起動。
                 var corner = corners.First(c => c.Id == segment.CornerId);
                 // ゲストコーナー（W14）はゲストを cast 末尾へ。判定はゲスト分岐を先に（万一ゲストが最初の talk でも挨拶を付けない）。
-                // それ以外は冒頭トークにのみ挨拶、他コーナーは時報リード文（W13.5 §3）。cast は当日編成（先頭＝メイン）。
+                // それ以外は冒頭トークにのみ挨拶＋振り返り、他コーナーは時報リード文（W13.5 §3 / W18 §6）。cast は当日編成（先頭＝メイン）。
                 CornerContext context;
                 if (guestCornerId is not null && segment.CornerId == guestCornerId)
                 {
@@ -335,10 +416,12 @@ public sealed class BroadcastEngine
                 }
                 else
                 {
+                    var isFirstTalk = index == firstTalkIndex;
                     context = new CornerContext(
                         CastDjIds: castDjIds,
-                        Greeting: index == firstTalkIndex ? greeting : null,
-                        LeadIn: index == firstTalkIndex ? null : corner.LeadIn);
+                        Greeting: isFirstTalk ? greeting : null,
+                        LeadIn: isFirstTalk ? null : corner.LeadIn,
+                        JournalContext: isFirstTalk ? journalContext : null);
                 }
                 var talkToken = ledger.BeginPreparation(index, ct);
                 ledger.AddCorner(index, PrepareCornerAsync(corner, djs, context, index, ledger, talkToken));

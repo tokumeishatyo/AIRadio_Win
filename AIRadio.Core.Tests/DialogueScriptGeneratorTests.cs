@@ -198,6 +198,55 @@ public class DialogueScriptGeneratorTests
         Assert.DoesNotContain("ゲスト", request.Prompt);
     }
 
+    // --- W18: 長期記憶 journalContext（冒頭コーナーのみ・dateContext と同型の注入経路） ---
+
+    [Fact]
+    public void MakeRequest_WithJournalContext_AndGreeting_InjectsRecapSectionAndSoftConstraint()
+    {
+        var corner = new CornerTemplate(
+            "free_talk", "フリートーク", "音楽", CornerFormat.FreeTalk,
+            new[] { "zundamon", "metan" }, "spotify:track:fb");
+        var song = new TrackInfo("spotify:track:x", "アイドル", "YOASOBI");
+
+        var request = DialogueScriptGenerator.MakeRequest(
+            corner, Djs, song, theme: "音楽", greeting: "こんばんは",
+            journalContext: "・ゲストに九州そらさんを迎えました。");
+
+        Assert.Contains("# 前回までの番組の振り返り", request.Prompt);          // 振り返りセクション
+        Assert.Contains("ゲストに九州そらさんを迎えました。", request.Prompt);    // 中身
+        Assert.Contains("軽く一言だけ触れてから本題へ入る", request.Prompt);      // 冒頭の振り返り制約
+    }
+
+    [Fact]
+    public void MakeRequest_WithoutJournalContext_NoRecap()
+    {
+        var corner = new CornerTemplate(
+            "free_talk", "フリートーク", "音楽", CornerFormat.FreeTalk,
+            new[] { "zundamon", "metan" }, "spotify:track:fb");
+        var song = new TrackInfo("spotify:track:x", "アイドル", "YOASOBI");
+
+        var request = DialogueScriptGenerator.MakeRequest(corner, Djs, song, theme: "音楽", greeting: "こんばんは");
+
+        Assert.DoesNotContain("# 前回までの番組の振り返り", request.Prompt);
+        Assert.DoesNotContain("軽く一言だけ触れてから本題へ入る", request.Prompt);
+    }
+
+    [Fact]
+    public void MakeRequest_WithJournalContext_ButMidProgram_NoSoftConstraint()
+    {
+        // 途中コーナー（greeting null）: 「軽く一言触れる」制約は冒頭限定なので出さない（実運用では
+        // BroadcastEngine が途中に journalContext を渡さないため、この経路自体が発生しない）。
+        var corner = new CornerTemplate(
+            "free_talk", "フリートーク", "音楽", CornerFormat.FreeTalk,
+            new[] { "zundamon", "metan" }, "spotify:track:fb");
+        var song = new TrackInfo("spotify:track:x", "アイドル", "YOASOBI");
+
+        var request = DialogueScriptGenerator.MakeRequest(
+            corner, Djs, song, theme: "音楽", journalContext: "・米津玄師さんを特集しました。"); // greeting なし
+
+        Assert.DoesNotContain("軽く一言だけ触れてから本題へ入る", request.Prompt); // 冒頭限定の制約は出ない
+    }
+
     // --- W15: アーティスト特集のパート別プロンプト（位置依存・曲名原文一致・固定締め） ---
 
     private static IReadOnlyList<TrackInfo> FeatureTracks(int n) =>

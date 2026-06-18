@@ -20,22 +20,23 @@ public sealed class DialogueScriptGenerator
     public async Task<DialogueScript> GenerateAsync(
         CornerTemplate corner, IReadOnlyList<DjProfile> djs, TrackInfo song, string? theme = null,
         string dateContext = "", ListenerLetter? letter = null, string? greeting = null, DjProfile? guest = null,
-        CancellationToken ct = default)
+        string journalContext = "", CancellationToken ct = default)
     {
-        var request = MakeRequest(corner, djs, song, theme, dateContext, letter, greeting, guest, _temperature);
+        var request = MakeRequest(corner, djs, song, theme, dateContext, letter, greeting, guest, journalContext, _temperature);
         var raw = await _llm.GenerateAsync(request, ct).ConfigureAwait(false);
         return Parse(raw, djs);
     }
 
-    // MARK: - プロンプト構築（W6: free_talk / W12: お便り + 日付・季節 / W13.5: 冒頭挨拶 greeting / W14: ゲスト。長期記憶は後続スライス）
+    // MARK: - プロンプト構築（W6: free_talk / W12: お便り + 日付・季節 / W13.5: 冒頭挨拶 greeting / W14: ゲスト / W18: 長期記憶 journalContext）
 
     /// <param name="djs">出演者（**順序付き・先頭＝メイン**、ゲストコーナーは末尾にゲスト）。メインが主導し、他は相槌・ツッコミ・応答で返す（W13.5 §6）。</param>
     /// <param name="greeting">冒頭コーナーのみ非 null（時刻連動の挨拶語）。非 null＝挨拶＋出演者紹介、null＝挨拶抑制で即本題。</param>
     /// <param name="guest">ゲストコーナーのみ非 null（迎えるゲスト）。専門家フレーミング制約を付与（W14 §4）。</param>
+    /// <param name="journalContext">冒頭コーナーのみ非空（前回までの当週ハイライト振り返り。W18 §4。dateContext と同型の注入経路）。</param>
     public static LLMRequest MakeRequest(
         CornerTemplate corner, IReadOnlyList<DjProfile> djs, TrackInfo song, string? theme = null,
         string dateContext = "", ListenerLetter? letter = null, string? greeting = null, DjProfile? guest = null,
-        double temperature = 0.9)
+        string journalContext = "", double temperature = 0.9)
     {
         var selectedTheme = theme ?? corner.Theme;
         var names = string.Join("」「", djs.Select(d => d.Name));
@@ -62,6 +63,11 @@ public sealed class DialogueScriptGenerator
         {
             sections.Add($"# 今日の日付と季節\n{dateContext}");
         }
+        // 前回までの振り返り（長期記憶。冒頭コーナーのみ＝BroadcastEngine が opening の context にだけ設定。W18 §6）。
+        if (journalContext.Length > 0)
+        {
+            sections.Add($"# 前回までの番組の振り返り\n{journalContext}");
+        }
 
         var constraints = new List<string>
         {
@@ -79,6 +85,11 @@ public sealed class DialogueScriptGenerator
             constraints.Add($"出演者紹介のあと、メイン「{main}」が『今日の気分』を一言（調子・気分や、今日の天気・季節の感想など）添えてから、本題へ自然に橋渡しする。");
             // 時刻・時間帯の断定抑制（W16 §3-2。Mac shipped の post-spec ライブ修正）。気分・天気を語ると時間帯（time-of-day）を口走りやすく実時刻とズレるため、挨拶語にとどめる。
             constraints.Add($"挨拶は「{greeting}」のような挨拶語にとどめ、『深夜』『夕方』『◯時』など具体的な時刻・時間帯は断定しない（正確な時刻はこの場面では言わない）。");
+            // 長期記憶（W18 §6）。前回の振り返りがあれば軽く一言だけ触れる（長々と振り返らない）。冒頭コーナー限定。
+            if (journalContext.Length > 0)
+            {
+                constraints.Add("冒頭で、前回までの放送の振り返り（上記）に軽く一言だけ触れてから本題へ入る（長々と振り返らない）。");
+            }
         }
         else
         {

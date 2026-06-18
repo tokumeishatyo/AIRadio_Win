@@ -72,3 +72,17 @@ public interface IRadioLog
 {
     void Log(string message);
 }
+
+/// <summary>
+/// ステーション・ジャーナル（週次長期記憶）の永続化（W18。design §2 の正規シーム＝テストで fake 差し替え）。
+/// 同期 I/O（小さな YAML・<see cref="ProgramLengthStore"/> 同様）。実装は <c>YamlJournalStore</c>（<c>journal.local.yaml</c>）。
+/// 長期記憶は事故ゼロ系のため、load の throw（壊れファイル）は呼び出し側が握り潰して空に倒す。
+/// </summary>
+public interface IJournalStore
+{
+    /// <summary>保存済みジャーナルを読む。ファイル無し＝<see cref="StationJournal.Empty"/>。壊れていたら throw（caller が握り潰す）。</summary>
+    StationJournal Load();
+
+    /// <summary>ジャーナルを保存する（原子的上書き）。</summary>
+    void Save(StationJournal journal);
+}

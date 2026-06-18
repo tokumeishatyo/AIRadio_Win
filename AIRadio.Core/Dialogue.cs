@@ -80,8 +80,10 @@ public sealed record ArtistFeatureParams(
 /// <param name="Greeting">冒頭トークのみ非 null（時刻連動の挨拶語）。非 null＝挨拶＋出演者紹介、null＝挨拶抑制で即本題。</param>
 /// <param name="LeadIn">その他コーナーの時報リード文テンプレート（発話直前に展開・合成）。</param>
 /// <param name="Guest">ゲストコーナー（W14）のみ非 null（選定済みゲスト。<c>djs</c> に居ないため別持ち）。cast 末尾に足す。</param>
+/// <param name="JournalContext">冒頭コーナー（W18）のみ非 null/非空（前回までの当週ハイライト振り返り）。台本プロンプトに軽く一言注入する。</param>
 public sealed record CornerContext(
     IReadOnlyList<string>? CastDjIds = null,
     string? Greeting = null,
     string? LeadIn = null,
-    DjProfile? Guest = null);
+    DjProfile? Guest = null,
+    string? JournalContext = null);
