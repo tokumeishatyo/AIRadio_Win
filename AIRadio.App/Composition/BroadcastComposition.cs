@@ -53,6 +53,8 @@ internal sealed class BroadcastComposition
             // 暦コンテキスト（W17。曜日名・記念日）。ファイルが無ければ Standard（曜日名のみ・記念日なし。あるのに壊れていれば fail-fast）。
             var calendarPath = Path.Combine(_configDir, "calendar.yaml");
             var calendar = File.Exists(calendarPath) ? DailyCalendarConfig.LoadFile(calendarPath) : DailyCalendar.Standard;
+            // 読み辞書（W19a）。無ければ空＝同期なし。壊れていれば fail-fast（ConfigException）。W19a は pronunciations.yaml のみ（artists の reading 統合は W19b）。
+            var pronunciations = PronunciationsConfig.LoadFile(Path.Combine(_configDir, "pronunciations.yaml"));
 
             // 番組の長さ: メニュー選択（%LOCALAPPDATA% 永続化）が優先、なければ program.yaml の既定値（w13 §5）。
             var length = new ProgramLengthStore().Read() ?? blueprint.DefaultLength;
@@ -70,6 +72,8 @@ internal sealed class BroadcastComposition
             var catalog = new SpotifyArtistCatalog(auth, http, spotifyConfig.Market);
             var spotify = new WebApiSpotifyController(auth, http, preferredDeviceName: spotifyConfig.DeviceName);
             var tts = new VoicevoxTTS(ttsConfig.Endpoint, http, ttsConfig.SpeedScale);
+            // 読み辞書の同期は TTS と同じ endpoint・http を共有（W19a §7）。
+            var userDict = new VoicevoxUserDict(ttsConfig.Endpoint, http);
             var audio = new NAudioPlayer((float)ttsConfig.PlaybackVolume);
             var llm = new GeminiLLMBackend(llmConfig, http);
 
@@ -114,6 +118,8 @@ internal sealed class BroadcastComposition
             var lengthLabel = plan.Length.IsEndless ? "エンドレス" : $"トーク{plan.Length.Corners}本";
             var countLabel = plan.TotalSegmentCount is int total ? $"・{total} セグメント" : "";
             _log.Log($"放送開始: 「{plan.Title}」（{lengthLabel}{countLabel}）");
+            // 放送開始時に読み辞書を冪等同期（fail-tolerant・throw しない。W19a §5/§7）。本番・broadcast デモ両経路をカバー。
+            LogPronunciationSync(await userDict.SyncAsync(pronunciations, ct).ConfigureAwait(false));
             await engine.RunAsync(plan, themes, corners, djs, control, guests, artists, ct).ConfigureAwait(false);
         }
         catch (OperationCanceledException)
@@ -161,6 +167,34 @@ internal sealed class BroadcastComposition
         var count = await generator.GenerateAsync(genConfig, artistsPath, ct: ct).ConfigureAwait(false);
         _log.Log($"アーティスト一覧を生成しました（{count} 組）→ {artistsPath}");
         return count;
+    }
+
+    // 読み辞書同期（W19a）の PRON コード。診断ログ用・throw しない（Mac は logPronunciationSync にリテラル直書き＝App 層）。
+    // Core に定数クラスを置かない（PRON コードの消費者は App のログ整形だけ。§3-5 / spec §8）。
+    private const string PronSyncUnreachableCode = "E-PRON-SYNC-UNREACHABLE-001";
+    private const string PronWordRejectedCode = "E-PRON-WORD-REJECTED-001";
+
+    /// <summary>
+    /// 読み辞書同期（W19a）の結果を進行ログに出す（診断用。コードは error-codes.md の PRON カテゴリ）。
+    /// 接続不可は専用行、変更ありのときだけ件数行、変更なし（skip のみ）は無言（Mac <c>logPronunciationSync</c> 相当）。
+    /// </summary>
+    private void LogPronunciationSync(PronunciationSyncSummary summary)
+    {
+        if (summary.Unreachable)
+        {
+            _log.Log($"  📖 読み辞書: VOICEVOX に接続できず同期スキップ [{PronSyncUnreachableCode}]");
+            return;
+        }
+        if (summary.Added + summary.Updated + summary.Failed == 0)
+        {
+            return;   // 変更なし（skip のみ）は無言。
+        }
+        var line = $"  📖 読み辞書同期: 追加{summary.Added} 更新{summary.Updated} skip{summary.Skipped}";
+        if (summary.Failed > 0)
+        {
+            line += $" 失敗{summary.Failed} [{PronWordRejectedCode}]";
+        }
+        _log.Log(line);
     }
 
     private static string FormatBroadcastEvent(BroadcastEvent e) => e switch

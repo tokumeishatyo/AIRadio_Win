@@ -1,0 +1,13 @@
+# 読み正確化（仕様 w19a）。表記 → カタカナ読み。放送開始時に VOICEVOX /user_dict へ冪等同期する。
+# - 読みは「全角カタカナ」で書く（ひらがな・半角カナは VOICEVOX が登録を拒否する）。
+# - accent_type は任意（既定 0 = 平板）。word_type / priority も任意。
+# - 注意: 空白を含む純英字の表記（"SEKAI NO OWARI" 等）は VOICEVOX が照合できず効かない。
+#         その場合は通称カナ（"セカオワ" 等）や空白を詰めた表記を surface にする。
+# - 手編集可。行を足せば次の放送から反映される。
+pronunciations:
+  - surface: "栄光の架橋"
+    pronunciation: "エイコウノカケハシ"
+  - surface: "Mr.Children"
+    pronunciation: "ミスターチルドレン"
+  - surface: "Official髭男dism"
+    pronunciation: "オフィシャルヒゲダンディズム"

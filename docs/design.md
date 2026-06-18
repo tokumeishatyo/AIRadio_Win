@@ -70,7 +70,7 @@
 | AppleScript Spotify フォールバック | **移植しない（ドロップ）** | Windows に Spotify ローカル自動化 API なし |
 | 秘密トークン保管（`KeychainTokenStore`） | **DPAPI**（`ProtectedData`, `CurrentUser`, `%LOCALAPPDATA%`）。旧版 `DpapiSecureTokenStore` 流用可 | 高リスク（秘密情報） |
 | VOICEVOX TTS（`VoicevoxTTS`） | 直接移植（`127.0.0.1:50021`, `audio_query`→`synthesis`）。旧版 `VoicevoxTtsBackend` 流用可 | VOICEVOX は Windows ビルドあり |
-| VOICEVOX ユーザー辞書（`VoicevoxUserDict`） | 直接移植。NFKC→NFC = `Normalize(FormKC)`→`FormC`。カタカナ判定 = `Rune` レンジ | v0.25.2 quirk 再現 |
+| VOICEVOX ユーザー辞書（`VoicevoxUserDict`） | 直接移植。NFKC = `Normalize(NormalizationForm.FormKC)` 単一呼び出し（Mac の compatibility→canonical 2 段と等価＝W19a §13 W-1）。カタカナ判定 = `char` レンジ（U+30A1–U+30FA ＋ 中黒 U+30FB ＋ 長音 U+30FC・非空ガード前置）。具象クラス・`IHttpClient` 共有（新 interface なし） | v0.25.2 quirk 再現 |
 | Gemini LLM（`GeminiLLMBackend`） | 直接移植（`System.Text.Json` + `HttpClient`, `x-goog-api-key`）。旧版 `GeminiLlmBackend` 流用可 | |
 | ニュース RSS（`NewsRssSource` SAX） | `System.Xml.XmlReader`（ストリーミング） | 低リスク |
 | JMA 天気 / リサーチ | 直接移植（JSON/文字列ロジック） | |
