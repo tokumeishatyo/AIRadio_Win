@@ -231,6 +231,23 @@ public class CornerEngineTests
         Assert.Equal(2, prepared.LeadInSpeakerId);                       // メイン＝cast 先頭 metan(2)
     }
 
+    // --- W16 ②: free_talk のテーマ宣言リード文（lead_in の {theme} を準備時に選択テーマへ置換） ---
+
+    [Fact]
+    public async Task PrepareAsync_LeadInWithTheme_ReplacesThemeAtPrepareTime_KeepsTimePlaceholders()
+    {
+        // W16 ②: free_talk の lead_in の {theme} は準備時に選択テーマへ置換、時刻プレースホルダは run まで残す。
+        var engine = MakeEngine(new SpyAudioPlayer());
+        var context = new CornerContext(
+            CastDjIds: new[] { "zundamon", "metan" },
+            LeadIn: "{ampm}{hour}時{minute}分になりました。ここからは{theme}について話そうと思います。");
+
+        var prepared = await engine.PrepareAsync(FreeTalkCorner(), Djs, context); // ThemePool null → corner.Theme "音楽"
+
+        // {theme} は "音楽" へ置換済み、時刻プレースホルダは未展開のまま残る。
+        Assert.Equal("{ampm}{hour}時{minute}分になりました。ここからは音楽について話そうと思います。", prepared.LeadIn);
+    }
+
     [Fact]
     public async Task RunAsync_LeadInSynthFails_SkipsLeadIn_ContinuesScript()
     {

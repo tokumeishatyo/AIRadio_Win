@@ -141,6 +141,8 @@ public class DialogueScriptGeneratorTests
         Assert.Contains("おはようございます", request.Prompt);             // 挨拶語
         Assert.Contains("ケイラボAIラジオ", request.Prompt);              // 番組名の名乗り
         Assert.Contains("ずんだもん", request.Prompt);                    // 出演者紹介（names）
+        Assert.Contains("『今日の気分』を一言", request.Prompt);            // W16 ①: 今日の気分の一言
+        Assert.Contains("具体的な時刻・時間帯は断定しない", request.Prompt); // W16 ①': 時刻・時間帯の断定抑制
         Assert.DoesNotContain("これは番組の途中のコーナー", request.Prompt); // 途中分岐は出さない
         Assert.DoesNotContain("番組全体を締めくくる言い方", request.Prompt); // 冒頭に終了風抑止は付けない
     }
@@ -159,6 +161,8 @@ public class DialogueScriptGeneratorTests
         Assert.Contains("これは番組の途中のコーナー", request.Prompt);
         Assert.Contains("番組全体を締めくくる言い方", request.Prompt); // 終了風抑止句を維持
         Assert.DoesNotContain("番組の最初のコーナー", request.Prompt);
+        Assert.DoesNotContain("『今日の気分』を一言", request.Prompt);     // W16 ①: 冒頭コーナー限定（途中では出さない）
+        Assert.DoesNotContain("具体的な時刻・時間帯は断定しない", request.Prompt); // W16 ①': 冒頭コーナー限定
     }
 
     [Fact]

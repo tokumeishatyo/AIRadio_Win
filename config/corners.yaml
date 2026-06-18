@@ -21,7 +21,8 @@ corners:
       - "最近ちょっと気になっていること"
     format: free_talk
     # 時報リード文（W13.5）。冒頭トーク以外で、その日のメインが発話直前に時刻展開して読む。
-    lead_in: "{ampm}{hour}時{minute}分になりました。ここからはフリートークのコーナーです。"
+    # W16 ②: テーマ宣言形。{theme} は選択テーマで準備時置換、時刻は発話直前展開。
+    lead_in: "{ampm}{hour}時{minute}分になりました。ここからは{theme}について話そうと思います。"
     dj_ids: [zundamon, metan]
     target_minutes: 5
     chars_per_minute: 320

@@ -75,6 +75,10 @@ public sealed class DialogueScriptGenerator
         if (greeting is not null)
         {
             constraints.Add($"これは番組の最初のコーナー。メイン「{main}」がまず「{greeting}」とリスナーに挨拶し、番組名「ケイラボAIラジオ」と本日の出演者（「{names}」）を紹介してから本題に入る。");
+            // 標準13項目の③「DJの今日の気分」（W16 §3-1 / Mac s16 ①）。冒頭の会話のフリとして本題へ橋渡しする。
+            constraints.Add($"出演者紹介のあと、メイン「{main}」が『今日の気分』を一言（調子・気分や、今日の天気・季節の感想など）添えてから、本題へ自然に橋渡しする。");
+            // 時刻・時間帯の断定抑制（W16 §3-2。Mac shipped の post-spec ライブ修正）。気分・天気を語ると時間帯（time-of-day）を口走りやすく実時刻とズレるため、挨拶語にとどめる。
+            constraints.Add($"挨拶は「{greeting}」のような挨拶語にとどめ、『深夜』『夕方』『◯時』など具体的な時刻・時間帯は断定しない（正確な時刻はこの場面では言わない）。");
         }
         else
         {
