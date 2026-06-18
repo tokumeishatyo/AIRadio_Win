@@ -182,10 +182,13 @@ public sealed class WebApiSpotifyController : ISpotifyController
     /// 再生先デバイスの選択。**この PC の Spotify 以外に勝手に飛ばさない**:
     /// <list type="bullet">
     /// <item><paramref name="_preferredDeviceName"/> 指定時: 名前一致のみ（なければ NoDevice）。</item>
-    /// <item>未指定時: type=Computer のデバイス（アクティブ優先）。Computer がなければ NoDevice。</item>
+    /// <item>未指定時: <b>この PC（Spotify 表示名＝コンピュータ名 <see cref="Environment.MachineName"/>）の Computer を最優先</b>。
+    /// 一致が無ければ type=Computer のデバイス（アクティブ優先 → 先頭）。Computer がなければ NoDevice。</item>
     /// </list>
-    /// （<c>devices.first</c> への安易なフォールバックは、スマホ等へ Spotify Connect 転送して
-    /// 別の場所で鳴らす事故になるため行わない。）
+    /// <para>ホスト名優先（Win 独自・Mac には無い）は、同一アカウントに別 PC（例: Mac）もログインして Computer が複数見える
+    /// 環境で、設定なしでもローカル機で鳴らすため（実機で別デバイス再生を確認 2026-06-18）。一致しなければ Mac と同一の
+    /// アクティブ→先頭ロジックに退行するので現状より悪くならない。<c>devices.first</c> への安易なフォールバック（スマホ等への
+    /// Connect 転送事故）は引き続き行わない。</para>
     /// </summary>
     private async Task<string> ActiveDeviceIdAsync(string token, CancellationToken ct)
     {
@@ -202,6 +205,14 @@ public sealed class WebApiSpotifyController : ISpotifyController
             }
 
             var computers = devices.Where(d => d.Type == "Computer").ToList();
+            // この PC（表示名＝コンピュータ名）を最優先。複数 Computer が見えてもローカル機で鳴らす。
+            var thisPc = computers.FirstOrDefault(
+                d => string.Equals(d.Name, Environment.MachineName, StringComparison.OrdinalIgnoreCase));
+            if (thisPc is not null)
+            {
+                return thisPc.Id;
+            }
+            // 一致が無ければ Mac 同一ロジック（アクティブ Computer → 先頭 Computer）。
             var device = computers.FirstOrDefault(d => d.IsActive) ?? computers.FirstOrDefault()
                 ?? throw SpotifyException.NoDevice();
             return device.Id;

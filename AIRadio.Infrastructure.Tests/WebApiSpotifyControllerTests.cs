@@ -64,6 +64,37 @@ public class WebApiSpotifyControllerTests
         Assert.Contains("device_id=PC", PlayRequest(fake)!.Url.Query);
     }
 
+    // device_name 未指定でも、この PC（表示名＝コンピュータ名）の Computer を最優先で選ぶ（別 Computer がアクティブでも）。
+    [Fact]
+    public async Task Play_PrefersThisPcByHostname_OverOtherActiveComputer()
+    {
+        var host = Environment.MachineName;
+        var json = Encoding.UTF8.GetBytes(
+            "{\"devices\":[" +
+            "{\"id\":\"OTHER\",\"is_active\":true,\"type\":\"Computer\",\"name\":\"OtherPC\"}," +
+            "{\"id\":\"THISPC\",\"is_active\":false,\"type\":\"Computer\",\"name\":\"" + host + "\"}]}");
+        var (controller, fake) = MakeController(url => url.AbsoluteUri.Contains("/devices") ? json : Empty);
+
+        await controller.PlayAsync("spotify:track:abc");
+
+        Assert.Contains("device_id=THISPC", PlayRequest(fake)!.Url.Query); // アクティブな別 Computer より自分を優先
+    }
+
+    // ホスト名に一致する Computer が無ければ、従来どおり（Mac 同一）アクティブな Computer → 先頭の Computer に退行する。
+    [Fact]
+    public async Task Play_FallsBackToActiveComputer_WhenNoHostnameMatch()
+    {
+        var json = Encoding.UTF8.GetBytes(
+            "{\"devices\":[" +
+            "{\"id\":\"IDLE\",\"is_active\":false,\"type\":\"Computer\",\"name\":\"Idle-PC-x9\"}," +
+            "{\"id\":\"ACTIVE\",\"is_active\":true,\"type\":\"Computer\",\"name\":\"Active-PC-x9\"}]}");
+        var (controller, fake) = MakeController(url => url.AbsoluteUri.Contains("/devices") ? json : Empty);
+
+        await controller.PlayAsync("spotify:track:abc");
+
+        Assert.Contains("device_id=ACTIVE", PlayRequest(fake)!.Url.Query);
+    }
+
     [Fact]
     public async Task Play_WithoutComputerDevice_ThrowsNoDevice()
     {

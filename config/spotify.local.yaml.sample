@@ -12,5 +12,7 @@ spotify:
   client_id: "YOUR_CLIENT_ID"
   redirect_uri: "http://127.0.0.1:5543/callback"
   market: "JP"
-  # 再生先デバイス（Spotify Connect の表示名）。省略時はこの PC（type=Computer）を自動選択。
+  # 再生先デバイス（Spotify Connect の表示名）。省略時はこの PC（表示名＝コンピュータ名）を優先選択し、
+  # 一致が無ければアクティブな Computer → 先頭の Computer を自動選択（スマホ等へは飛ばさない）。
+  # 別 PC を同一アカウントで使う等で固定したい場合のみ、表示名を明示指定する:
   # device_name: "MY-PC"
