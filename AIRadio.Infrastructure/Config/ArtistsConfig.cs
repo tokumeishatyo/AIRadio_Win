@@ -7,7 +7,7 @@ namespace AIRadio.Infrastructure;
 /// <b>出荷時は空</b>（メニューの生成ボタンで作成）。空・未生成・コメントのみは正常（空リストを返す）。
 /// ファイルが存在して壊れている（パース不能 / name 欠落 / id 欠落 / id 重複 / 正規化 name 重複）場合のみ
 /// throw（fail-fast、<c>E-CFG-MISSING-FIELD-001</c>）。<b>ゲスト（<see cref="GuestsConfig"/>）と異なり空は throw しない</b>（spec §18-3）。
-/// reading は W15 では読まない（id/name のみ。W19b 送り＝§18-12。yaml にあっても <c>IgnoreUnmatchedProperties</c> で無視）。
+/// reading（カタカナ読み・VOICEVOX 辞書同期用）は任意（W19b で追加。欠落許容＝既存 yaml はそのまま読める）。
 /// </summary>
 public static class ArtistsConfig
 {
@@ -62,7 +62,7 @@ public static class ArtistsConfig
             {
                 throw ConfigException.MissingField($"artists[].name が重複: {a.Name}");
             }
-            result.Add(new ArtistProfile(a.Id, a.Name));
+            result.Add(new ArtistProfile(a.Id, a.Name, a.Reading));
         }
         return result;
     }
@@ -84,5 +84,6 @@ public static class ArtistsConfig
     {
         public string? Id { get; set; }
         public string? Name { get; set; }
+        public string? Reading { get; set; }   // 任意（W19b。カタカナ読み）。
     }
 }

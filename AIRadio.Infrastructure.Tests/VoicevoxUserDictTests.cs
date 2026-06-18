@@ -391,4 +391,53 @@ public class VoicevoxUserDictTests
         Assert.Single(http.Requests);
         Assert.Equal("GET", http.Requests[0].Method);
     }
+
+    // --- W19b: MergedEntries（pronunciations.yaml ＋ artists.yaml の reading 統合）---
+
+    [Fact]
+    public void MergedEntries_CombinesArtistReadingsAsProperNoun_ExcludesNullReading()
+    {
+        var pron = new[] { new PronunciationEntry("栄光の架橋", "エイコウノカケハシ") };
+        var artists = new[]
+        {
+            new ArtistProfile("a1", "米津玄師", "ヨネヅケンシ"),
+            new ArtistProfile("a2", "あいみょん"),   // reading=null → 対象外
+        };
+
+        var merged = VoicevoxUserDict.MergedEntries(pron, artists);
+
+        Assert.Equal(2, merged.Count);
+        Assert.Contains(merged, e => e.Surface == "栄光の架橋");
+        Assert.DoesNotContain(merged, e => e.Surface == "あいみょん");
+        var yonezu = Assert.Single(merged, e => e.Surface == "米津玄師");
+        Assert.Equal("ヨネヅケンシ", yonezu.Pronunciation);
+        Assert.Equal(0, yonezu.AccentType);
+        Assert.Equal("PROPER_NOUN", yonezu.WordType);
+    }
+
+    [Fact]
+    public void MergedEntries_PronunciationsWinOnNfkcCollision()
+    {
+        // 半角 ASCII の pronunciations と全角同義の artist 名は NFKC 突合で衝突 → pronunciations 先勝ち。
+        var pron = new[] { new PronunciationEntry("Mr.Children", "ミスチル") };
+        var artists = new[] { new ArtistProfile("a1", "Ｍｒ．Ｃｈｉｌｄｒｅｎ", "ミスターチルドレン") };
+
+        var merged = VoicevoxUserDict.MergedEntries(pron, artists);
+
+        var only = Assert.Single(merged);
+        Assert.Equal("Mr.Children", only.Surface);      // pronunciations の raw 値
+        Assert.Equal("ミスチル", only.Pronunciation);    // 明示指定が勝つ（素の == 突合なら 2 件で落ちる）
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    public void MergedEntries_ExcludesNullOrEmptyReading(string? reading)
+    {
+        var merged = VoicevoxUserDict.MergedEntries(
+            Array.Empty<PronunciationEntry>(),
+            new[] { new ArtistProfile("a1", "米津玄師", reading) });
+
+        Assert.Empty(merged);
+    }
 }

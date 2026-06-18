@@ -49,4 +49,19 @@ public class ArtistsConfigTests
         Assert.False(File.Exists(path));
         Assert.Empty(ArtistsConfig.LoadFile(path));
     }
+
+    [Fact]
+    public void Artists_Reading_LoadedWhenPresent_NullWhenAbsent()
+    {
+        // W19b: reading は任意。欠落許容（既存 yaml はそのまま読める）。
+        const string yaml =
+            "artists:\n"
+            + "  - id: a1\n    name: \"米津玄師\"\n    reading: \"ヨネヅケンシ\"\n"
+            + "  - id: a2\n    name: \"あいみょん\"\n";
+
+        var artists = ArtistsConfig.FromYaml(yaml);
+
+        Assert.Equal("ヨネヅケンシ", artists[0].Reading);
+        Assert.Null(artists[1].Reading);
+    }
 }

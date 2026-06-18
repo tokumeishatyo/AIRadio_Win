@@ -119,7 +119,9 @@ internal sealed class BroadcastComposition
             var countLabel = plan.TotalSegmentCount is int total ? $"・{total} セグメント" : "";
             _log.Log($"放送開始: 「{plan.Title}」（{lengthLabel}{countLabel}）");
             // 放送開始時に読み辞書を冪等同期（fail-tolerant・throw しない。W19a §5/§7）。本番・broadcast デモ両経路をカバー。
-            LogPronunciationSync(await userDict.SyncAsync(pronunciations, ct).ConfigureAwait(false));
+            // pronunciations.yaml（明示・優先）＋ artists.yaml の reading（W19b）を統合して同期する。
+            var pronEntries = VoicevoxUserDict.MergedEntries(pronunciations, artists);
+            LogPronunciationSync(await userDict.SyncAsync(pronEntries, ct).ConfigureAwait(false));
             await engine.RunAsync(plan, themes, corners, djs, control, guests, artists, ct).ConfigureAwait(false);
         }
         catch (OperationCanceledException)

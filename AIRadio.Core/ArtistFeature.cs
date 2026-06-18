@@ -4,9 +4,9 @@ namespace AIRadio.Core;
 
 /// <summary>
 /// アーティスト特集で特集する 1 組（<c>config/artists.yaml</c>。仕様 w15）。曲は持たず、実行時に top-tracks で確定する。
-/// <c>reading</c>（カタカナ読み・VOICEVOX 辞書）は W19b 送りのため W15 では持たない（spec §18-12）。
+/// <paramref name="Reading"/>（カタカナ読み・VOICEVOX 辞書同期用。任意・既定 null＝読み未登録）は W19b で追加（後方互換）。
 /// </summary>
-public sealed record ArtistProfile(string Id, string Name);
+public sealed record ArtistProfile(string Id, string Name, string? Reading = null);
 
 /// <summary>
 /// アーティスト特集の発話パート（台本生成の種別。仕様 w15 §7）。

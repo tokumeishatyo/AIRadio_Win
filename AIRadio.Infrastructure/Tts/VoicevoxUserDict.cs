@@ -188,11 +188,37 @@ public sealed class VoicevoxUserDict
         return builder.Uri;
     }
 
+    /// <summary>
+    /// 読み辞書エントリを統合する（W19b §4）。<paramref name="pronunciations"/>（明示・最優先）を先頭に置き、
+    /// <paramref name="artists"/> のうち <c>Reading</c> が非 null・非空のものを <c>PROPER_NOUN</c> エントリとして追加する。
+    /// surface の重複は <see cref="MatchKey"/>（NFKC）先勝ち＝pronunciations.yaml が勝つ。
+    /// </summary>
+    public static IReadOnlyList<PronunciationEntry> MergedEntries(
+        IReadOnlyList<PronunciationEntry> pronunciations, IReadOnlyList<ArtistProfile> artists)
+    {
+        var result = new List<PronunciationEntry>(pronunciations);
+        var seen = new HashSet<string>(pronunciations.Select(p => MatchKey(p.Surface)));
+        foreach (var artist in artists)
+        {
+            if (string.IsNullOrEmpty(artist.Reading))
+            {
+                continue;   // 読み未登録（null/空）は対象外。
+            }
+            if (!seen.Add(MatchKey(artist.Name)))
+            {
+                continue;   // pronunciations.yaml または先行アーティストが先勝ち。
+            }
+            result.Add(new PronunciationEntry(
+                artist.Name, artist.Reading, AccentType: 0, WordType: "PROPER_NOUN"));
+        }
+        return result;
+    }
+
     /// <summary>突合キー：NFKC（全角/半角の差を吸収）。<c>Mr.Children</c> ↔ <c>Ｍｒ．Ｃｈｉｌｄｒｅｎ</c> を一致させる。</summary>
     private static string MatchKey(string surface) => Normalize(surface);
 
-    /// <summary>読みの正規化：半角カナ → 全角カナ（濁点も合成）。</summary>
-    private static string NormalizePronunciation(string pronunciation) => Normalize(pronunciation);
+    /// <summary>読みの正規化：半角カナ → 全角カナ（濁点も合成）。<c>ArtistListGenerator.ParseEntries</c>（同一 assembly）も使用（W19b）。</summary>
+    internal static string NormalizePronunciation(string pronunciation) => Normalize(pronunciation);
 
     /// <summary>
     /// NFKC（互換分解 ＋ 正準合成）。.NET の <see cref="NormalizationForm.FormKC"/> は半角濁点（ﾄﾞ）→ ド まで
@@ -204,7 +230,7 @@ public sealed class VoicevoxUserDict
     /// 全角カタカナ（＋長音「ー」U+30FC・中黒「・」U+30FB）のみか。<b>空は false</b>（§5.1）。
     /// VOICEVOX は非カタカナ読みを 422 で弾く。C# の <see cref="Enumerable.All{T}"/> は空で true を返すため非空ガードを前置する。
     /// </summary>
-    private static bool IsKatakana(string text) =>
+    internal static bool IsKatakana(string text) =>
         !string.IsNullOrEmpty(text) && text.All(c =>
             (c >= 'ァ' && c <= 'ヺ')   // ァ..ヺ（カタカナ）
             || c == '・'                   // ・（中黒）
