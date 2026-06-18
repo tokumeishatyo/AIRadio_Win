@@ -1,3 +1,4 @@
+using AIRadio.Infrastructure;
 using Avalonia;
 
 namespace AIRadio.App;
@@ -13,6 +14,16 @@ internal static class Program
         {
             return DemoRunner.RunAsync(args).GetAwaiter().GetResult();
         }
+
+        // トレイ常駐は単一インスタンス（2 トレイが Spotify を同時制御する事故を防ぐ。W-Win §2）。
+        // CLI デモ（引数あり）は対象外＝複数同時実行を許容。
+        using var single = new SingleInstance("AIRadioWinTraySingleInstance");
+        if (!single.IsFirstInstance)
+        {
+            Console.WriteLine("ケイラボAIラジオは既に起動しています（タスクトレイのアイコンをご確認ください）。");
+            return 0;
+        }
+
         BuildAvaloniaApp().StartWithClassicDesktopLifetime(args);
         return 0;
     }

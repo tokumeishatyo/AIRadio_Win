@@ -35,6 +35,20 @@ public class TtsConfigTests
         Assert.Equal("", cfg.Credit);
         Assert.Equal(1.0, cfg.PlaybackVolume);
         Assert.Equal(1.0, cfg.SpeedScale);
+        Assert.Null(cfg.VoicevoxExePath);   // 未設定は null（後方互換・W-Win）
+    }
+
+    [Fact]
+    public void FromYaml_ReadsVoicevoxExePath_WhenPresent()
+    {
+        var yaml =
+            "voicevox:\n" +
+            "  endpoint: \"http://x/\"\n" +
+            "  exe_path: \"C:\\\\Programs\\\\VOICEVOX\\\\VOICEVOX.exe\"\n";
+
+        var cfg = TtsConfig.FromYaml(yaml);
+
+        Assert.Equal("C:\\Programs\\VOICEVOX\\VOICEVOX.exe", cfg.VoicevoxExePath);
     }
 
     [Fact]

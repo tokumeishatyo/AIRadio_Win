@@ -4,6 +4,9 @@
 voicevox:
   endpoint: "http://127.0.0.1:50021/"
   credit: "VOICEVOX:{speaker}"
+  # exe_path: アプリ起動時に VOICEVOX を自動起動する exe パス（任意・W-Win）。
+  #           未設定なら標準インストール先（%LOCALAPPDATA%\Programs\VOICEVOX\VOICEVOX.exe 等）を探索する。
+  # exe_path: "C:\\Users\\<you>\\AppData\\Local\\Programs\\VOICEVOX\\VOICEVOX.exe"
 # 合成音声の再生音量（0.0〜1.0）。VOICEVOX はほぼフルスケールで出力されるため、
 # Spotify の音楽より声が大きすぎる場合はここを下げてバランスを取る。
 playback_volume: 1.0

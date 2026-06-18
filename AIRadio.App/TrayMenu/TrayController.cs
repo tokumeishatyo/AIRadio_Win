@@ -45,6 +45,9 @@ internal sealed class TrayController
     private Task? _generateTask;
     private CancellationTokenSource? _generateCts;
 
+    /// <summary>終了処理（明示「終了」 or セッション終了）に入ったか。二重 graceful shutdown を防ぐ（W-Win §4）。</summary>
+    private bool _isShuttingDown;
+
     public TrayController(IClassicDesktopStyleApplicationLifetime desktop)
     {
         _desktop = desktop;
@@ -77,7 +80,62 @@ internal sealed class TrayController
         };
         TrayIcon.SetIcons(Application.Current!, new TrayIcons { _trayIcon });
 
+        // セッション終了（ログオフ/シャットダウン）の best-effort graceful 停止（W-Win §4）。
+        // 明示「終了」は Shutdown(0) 直叩きで本イベントを発火しないため二重処理にならない（TryShutdown のみ発火）。
+        _desktop.ShutdownRequested += OnShutdownRequested;
+
+        // VOICEVOX 自動起動（W-Win §3）。アプリ起動時に未応答なら起動。完全 fail-tolerant（背景・throw しない）。
+        _ = EnsureVoicevoxAsync();
+
         _log.Log("ケイラボAIラジオ — タスクトレイに常駐します（アイコンのメニューから開始 / 停止）。");
+    }
+
+    /// <summary>アプリ起動時に VOICEVOX が未応答なら起動する（W-Win §3）。結果をログに出すだけ＝放送系には無影響。</summary>
+    private async Task EnsureVoicevoxAsync()
+    {
+        try
+        {
+            var tts = TtsConfig.LoadFile(Path.Combine(_configDir, "tts.yaml"));
+            var launcher = new VoicevoxLauncher(
+                tts.Endpoint, new HttpClientAdapter(), VoicevoxLauncher.ResolveExePath(tts.VoicevoxExePath));
+            var result = await launcher.EnsureRunningAsync().ConfigureAwait(false);
+            _log.Log(result switch
+            {
+                VoicevoxLaunchResult.Launched => "VOICEVOX を自動起動しました。",
+                VoicevoxLaunchResult.AlreadyRunning => "VOICEVOX は起動済みです。",
+                VoicevoxLaunchResult.NotConfigured =>
+                    "VOICEVOX が見つかりませんでした（手動で起動してください。tts.yaml の voicevox.exe_path で明示できます）。",
+                VoicevoxLaunchResult.LaunchFailed => "VOICEVOX の自動起動に失敗しました（手動で起動してください）。",
+                _ => "",
+            });
+        }
+        catch (Exception ex)
+        {
+            // tts.yaml ロード失敗等。放送系は各々が再ロードするため無影響（自動起動だけスキップ）。
+            _log.Log($"VOICEVOX 自動起動をスキップしました: {ex.Message}");
+        }
+    }
+
+    /// <summary>
+    /// OS のセッション終了（ログオフ/シャットダウン）。放送中なら best-effort で停止＋Spotify pause（完全静寂 §3-1）。
+    /// OS は数秒で kill するため bounded。<see cref="ShutdownRequestedEventArgs.Cancel"/> は立てない（終了を妨げない）。
+    /// </summary>
+    private void OnShutdownRequested(object? sender, ShutdownRequestedEventArgs e)
+    {
+        if (_isShuttingDown)
+        {
+            return;
+        }
+        _isShuttingDown = true;
+        try
+        {
+            // Task.Run で UI 同期コンテキストを外し、UI スレッドブロックでの再入デッドロックを避ける。
+            Task.Run(() => _session.StopAndWaitAsync()).Wait(TimeSpan.FromSeconds(3));
+        }
+        catch
+        {
+            /* best-effort: セッション終了は妨げない */
+        }
     }
 
     private void Toggle()
@@ -212,6 +270,7 @@ internal sealed class TrayController
     /// <summary>graceful shutdown: 放送停止 → 後始末 pause 完了待ち → 終了（鳴らしっぱなし防止 §3-1）。</summary>
     private async Task ShutdownAsync()
     {
+        _isShuttingDown = true; // セッション終了ハンドラとの二重処理を防ぐ（W-Win §4）。
         // 進行中のアーティスト生成があればキャンセルして待つ（一時ファイルを残さない・rename とシャットダウンの競合回避。§9-3）。
         _generateCts?.Cancel();
         var generateTask = _generateTask;
