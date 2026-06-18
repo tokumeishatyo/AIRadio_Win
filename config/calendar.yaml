@@ -1,0 +1,26 @@
+# 暦設定（仕様 W17）。台本生成プロンプトに「曜日名・記念日」を注入する（Mac 版 config/calendar.yaml 流用）。
+# weekday_names: 曜日名（index = C# DayOfWeek。0=日曜 … 6=土曜の順）。キー省略時は標準日本語、present は 7 要素必須。
+# anniversaries: 記念日（date: "MM-DD" → name + significance）。
+#   significance: high = 祝日級（番組全体に波及。各コーナーが意識して織り込む）
+#                 low  = 軽い暦（話の流れで軽く触れる程度。深入りしない）／省略時は low 扱い
+# 一覧は最小から開始。運用で随時追記してよい（網羅は必須でない）。
+weekday_names: ["日曜日", "月曜日", "火曜日", "水曜日", "木曜日", "金曜日", "土曜日"]
+anniversaries:
+  # 国民の祝日（high）
+  - { date: "01-01", name: "元日",         significance: high }
+  - { date: "02-11", name: "建国記念の日", significance: high }
+  - { date: "04-29", name: "昭和の日",     significance: high }
+  - { date: "05-03", name: "憲法記念日",   significance: high }
+  - { date: "05-04", name: "みどりの日",   significance: high }
+  - { date: "05-05", name: "こどもの日",   significance: high }
+  - { date: "11-03", name: "文化の日",     significance: high }
+  - { date: "11-23", name: "勤労感謝の日", significance: high }
+  # 季節の行事（high）
+  - { date: "12-25", name: "クリスマス",   significance: high }
+  - { date: "12-31", name: "大晦日",       significance: high }
+  # 軽い記念日（low）
+  - { date: "02-14", name: "バレンタインデー", significance: low }
+  - { date: "03-14", name: "ホワイトデー",     significance: low }
+  - { date: "07-07", name: "七夕",             significance: low }
+  - { date: "10-31", name: "ハロウィン",       significance: low }
+  - { date: "11-22", name: "いい夫婦の日",     significance: low }

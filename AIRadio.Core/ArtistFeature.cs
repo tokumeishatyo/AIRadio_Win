@@ -111,6 +111,8 @@ public sealed class ArtistFeatureEngine
     private readonly double _temperature;
     private readonly TimeZoneInfo _timeZone;
     private readonly Action<ArtistFeatureEvent>? _onEvent;
+    /// <summary>曜日名・記念日の暦コンテキスト（W17。省略時は <see cref="DailyCalendar.Standard"/>）。</summary>
+    private readonly DailyCalendar _calendar;
 
     public ArtistFeatureEngine(
         ILLMBackend llm,
@@ -121,7 +123,8 @@ public sealed class ArtistFeatureEngine
         IClock clock,
         double temperature = 0.9,
         TimeZoneInfo? timeZone = null,
-        Action<ArtistFeatureEvent>? onEvent = null)
+        Action<ArtistFeatureEvent>? onEvent = null,
+        DailyCalendar? calendar = null)
     {
         _llm = llm;
         _tts = tts;
@@ -132,6 +135,7 @@ public sealed class ArtistFeatureEngine
         _temperature = temperature;
         _timeZone = timeZone ?? TimeZoneInfo.Local;
         _onEvent = onEvent;
+        _calendar = calendar ?? DailyCalendar.Standard;
     }
 
     // 準備 ------------------------------------------------------------------
@@ -164,7 +168,7 @@ public sealed class ArtistFeatureEngine
         }
         var groups = SplitGroups(tracks);
         var prms = corner.ArtistFeatureParams ?? new ArtistFeatureParams();
-        var dateContext = SeasonPhrases.DateContext(_clock.Now, _timeZone);
+        var dateContext = _calendar.Context(_clock.Now, _timeZone);
 
         // パート別台本（導入 → 各グループ紹介 → 各感想。締めは固定文）。
         var introScript = await GeneratePartAsync(

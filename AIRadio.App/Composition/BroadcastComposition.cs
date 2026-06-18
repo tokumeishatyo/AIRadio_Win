@@ -50,6 +50,9 @@ internal sealed class BroadcastComposition
             var guests = File.Exists(guestsPath) ? GuestsConfig.LoadFile(guestsPath) : Array.Empty<DjProfile>();
             // アーティスト特集プール（W15）。出荷時空・未生成は空＝実行時スキップ（あるのに壊れていれば fail-fast）。
             var artists = ArtistsConfig.LoadFile(Path.Combine(_configDir, "artists.yaml"));
+            // 暦コンテキスト（W17。曜日名・記念日）。ファイルが無ければ Standard（曜日名のみ・記念日なし。あるのに壊れていれば fail-fast）。
+            var calendarPath = Path.Combine(_configDir, "calendar.yaml");
+            var calendar = File.Exists(calendarPath) ? DailyCalendarConfig.LoadFile(calendarPath) : DailyCalendar.Standard;
 
             // 番組の長さ: メニュー選択（%LOCALAPPDATA% 永続化）が優先、なければ program.yaml の既定値（w13 §5）。
             var length = new ProgramLengthStore().Read() ?? blueprint.DefaultLength;
@@ -75,12 +78,14 @@ internal sealed class BroadcastComposition
             var cornerEngine = new CornerEngine(
                 llm, tts, audio, searcher, spotify, clock,
                 temperature: llmConfig.Temperature,
-                onEvent: e => _log.Log(FormatCornerEvent(e)));
+                onEvent: e => _log.Log(FormatCornerEvent(e)),
+                calendar: calendar);
             // アーティスト特集ランナー（W15）。onEvent を log へブリッジしないと FeatureSkipped（ART コード）が無出力になる（§18-32）。
             var artistFeatureEngine = new ArtistFeatureEngine(
                 llm, tts, audio, catalog, spotify, clock,
                 temperature: llmConfig.Temperature,
-                onEvent: e => _log.Log(FormatArtistFeatureEvent(e)));
+                onEvent: e => _log.Log(FormatArtistFeatureEvent(e)),
+                calendar: calendar);
             var news = new NewsRssSource(research.NewsRssUrl, http, research.NewsMaxItems);
             var weather = new JmaWeatherSource(research.WeatherAreaCode, research.WeatherAreaName, http);
             // ニュースは LLM アナウンサー原稿（W11）。読み手（program.news.dj_id、なければ anchor）のペルソナを使う。

@@ -248,6 +248,26 @@ public class CornerEngineTests
         Assert.Equal("{ampm}{hour}時{minute}分になりました。ここからは音楽について話そうと思います。", prepared.LeadIn);
     }
 
+    // --- W17: DailyCalendar（曜日名・記念日）の context が台本生成プロンプトに入る ---
+
+    [Fact]
+    public async Task PrepareAsync_InjectsDailyCalendarContext_WithAnniversary_IntoScriptPrompt()
+    {
+        // FakeClock 既定 = 1970-01-01（木曜・UTC）。元日(high) を登録した DailyCalendar を注入（Mac injectsAnniversaryFromDailyCalendar 相当）。
+        var llm = new ScriptedLLM("アイドル - YOASOBI", ScriptResponse);
+        var searcher = new FakeTrackSearcher(new[] { new TrackInfo("spotify:track:idol", "アイドル", "YOASOBI", IsPlayable: true) });
+        var calendar = new DailyCalendar(anniversaries: new[] { new Anniversary(1, 1, "元日", AnniversarySignificance.High) });
+        var engine = new CornerEngine(
+            llm, new InMemoryTTS(), new SpyAudioPlayer(), searcher, new FakeSpotifyController(), new FakeClock(),
+            timeZone: TimeZoneInfo.Utc, calendar: calendar);
+
+        await engine.PrepareAsync(FreeTalkCorner(), Djs);
+
+        // 台本生成リクエストの「# 今日の日付と季節」に曜日＋記念日 high 文が入る。
+        Assert.Contains(llm.Requests, r => r.Prompt.Contains(
+            "今日は1月1日（木曜日）、冬、正月明けです。今日は『元日』。番組を通して、元日にちなんだ話題を意識して織り込んでください。"));
+    }
+
     [Fact]
     public async Task RunAsync_LeadInSynthFails_SkipsLeadIn_ContinuesScript()
     {

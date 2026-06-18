@@ -60,6 +60,8 @@ public sealed class CornerEngine
     /// <summary>テーマプールからの選択用乱数（count → 0..count-1 のインデックス。テストは決定論的に注入）。</summary>
     private readonly Func<int, int> _randomIndex;
     private readonly TimeZoneInfo _timeZone;
+    /// <summary>曜日名・記念日の暦コンテキスト（W17。省略時は <see cref="DailyCalendar.Standard"/>）。</summary>
+    private readonly DailyCalendar _calendar;
 
     /// <param name="randomIndex">テーマプール選択用の乱数（W12。省略時は <see cref="Random.Shared"/>）。</param>
     /// <param name="timeZone">日付・季節コンテキストの解釈に使うタイムゾーン（W12。省略時は <see cref="TimeZoneInfo.Local"/>）。</param>
@@ -73,7 +75,8 @@ public sealed class CornerEngine
         double temperature = 0.9,
         Action<CornerEvent>? onEvent = null,
         Func<int, int>? randomIndex = null,
-        TimeZoneInfo? timeZone = null)
+        TimeZoneInfo? timeZone = null,
+        DailyCalendar? calendar = null)
     {
         _llm = llm;
         _tts = tts;
@@ -85,6 +88,7 @@ public sealed class CornerEngine
         _onEvent = onEvent;
         _randomIndex = randomIndex ?? (n => Random.Shared.Next(n));
         _timeZone = timeZone ?? TimeZoneInfo.Local;
+        _calendar = calendar ?? DailyCalendar.Standard;
     }
 
     /// <summary>準備 + 本番を続けて実行（単発デモ用）。</summary>
@@ -120,7 +124,7 @@ public sealed class CornerEngine
         }
         var theme = SelectTheme(corner);
         _onEvent?.Invoke(new CornerEvent.ThemeSelected(theme));
-        var dateContext = SeasonPhrases.DateContext(_clock.Now, _timeZone);
+        var dateContext = _calendar.Context(_clock.Now, _timeZone);
 
         var picker = new SongPicker(_llm, _searcher, _temperature);
         var generator = new DialogueScriptGenerator(_llm, _temperature);
