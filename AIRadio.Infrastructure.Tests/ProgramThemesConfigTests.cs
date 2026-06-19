@@ -578,11 +578,13 @@ ending:
         Assert.False(t.Opening.ByDj["tsumugi"].HasScript);
 
         var script = t.Opening.ByDj["reimu"].Script!;
-        Assert.Equal(4, script.Count);
-        Assert.Equal("reimu", script[0].Voices[0].Speaker);   // ① 霊夢
-        Assert.Equal("marisa", script[1].Voices[0].Speaker);  // ② 魔理沙
-        Assert.Single(script[2].Voices);                      // ③ 本編（単独）
-        Assert.Equal(2, script[3].Voices.Count);              // ④ 二人同時
+        Assert.Equal(5, script.Count);
+        Assert.Equal("reimu", script[0].Voices[0].Speaker);   // ① 霊夢 名乗り
+        Assert.Equal("marisa", script[1].Voices[0].Speaker);  // ② 魔理沙 名乗り
+        Assert.Single(script[2].Voices);                      // ③ 本編（霊夢単独・クレジット）
+        Assert.Equal(2, script[3].Voices.Count);              // ④ 二人同時の締め
+        Assert.Single(script[4].Voices);                      // ⑤ 曲振り（霊夢単独・{first_song} で終止）
+        Assert.Equal("reimu", script[4].Voices[0].Speaker);
     }
 
     /// <summary>テスト実行ディレクトリから親を辿って実 config/&lt;name&gt; を見つける（本番設定の実ロード検証用）。</summary>
