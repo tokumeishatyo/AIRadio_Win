@@ -84,8 +84,8 @@ internal sealed class BroadcastComposition
             var audio = new NAudioPlayer((float)ttsConfig.PlaybackVolume);
             var llm = new GeminiLLMBackend(llmConfig, http);
 
-            // 協調オブジェクト（OP/news/ED 演出・トーク・ニュース原稿）。
-            var themeSequencer = new ThemeSequencer(tts, audio, spotify, clock);
+            // 協調オブジェクト（OP/news/ED 演出・トーク・ニュース原稿）。warn は多声 OP の同時発話ミックス形式不一致の通知（W-OP）。
+            var themeSequencer = new ThemeSequencer(tts, audio, spotify, clock, _log.Log);
             var cornerEngine = new CornerEngine(
                 llm, tts, audio, searcher, spotify, clock,
                 temperature: llmConfig.Temperature,

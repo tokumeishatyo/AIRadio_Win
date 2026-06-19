@@ -58,7 +58,10 @@ public static class ThemesConfig
             OutroSeconds: t.OutroSeconds ?? 10);
     }
 
-    /// <summary>OP / ED: 共有演出 + DJ 別固定口上。<c>by_dj</c> 欠落・各 <c>announcement</c> 欠落は fail-fast。</summary>
+    /// <summary>
+    /// OP / ED: 共有演出 + DJ 別固定口上。<c>by_dj</c> 欠落は fail-fast。各 spiel は <c>announcement</c> XOR <c>script</c>
+    /// （多声台本・W-OP）。両立・両無・空 <c>script</c> はいずれも fail-fast（<c>E-CFG-MISSING-FIELD-001</c>）。
+    /// </summary>
     private static ThemedSegment BuildThemed(ThemeDto t, string name)
     {
         var staging = Staging(t, name);
@@ -69,13 +72,60 @@ public static class ThemesConfig
         var byDj = new Dictionary<string, DjSpiel>();
         foreach (var (id, spiel) in t.ByDj)
         {
-            if (string.IsNullOrEmpty(spiel?.Announcement))
+            var hasAnnouncement = !string.IsNullOrEmpty(spiel?.Announcement);
+            var hasScript = spiel?.Script is { Count: > 0 }; // 空 script([]) や省略は script 不在扱い。
+            if (hasAnnouncement == hasScript)
             {
-                throw ConfigException.MissingField($"themes.{name}.by_dj.{id}.announcement");
+                // 両立も両無も不正（announcement XOR script・W-OP §4-2）。
+                throw ConfigException.MissingField($"themes.{name}.by_dj.{id}.announcement / script（いずれか一方必須）");
             }
-            byDj[id] = new DjSpiel(spiel.Announcement, spiel.Tagline);
+            var script = hasScript ? BuildScript(spiel!.Script!, name, id) : null;
+            byDj[id] = new DjSpiel(spiel!.Announcement ?? "", spiel.Tagline, script);
         }
         return new ThemedSegment(staging, byDj);
+    }
+
+    /// <summary>多声台本 DTO → ドメイン。各 step は単独行 or 同時発話グループ（W-OP §4-2）。空グループ・speaker/line 欠落は fail-fast。</summary>
+    private static IReadOnlyList<SpielStep> BuildScript(List<ScriptStepDto> steps, string name, string djId)
+    {
+        var result = new List<SpielStep>(steps.Count);
+        for (var i = 0; i < steps.Count; i++)
+        {
+            var step = steps[i];
+            IReadOnlyList<SpielLine> voices;
+            if (step.Simultaneous is not null)
+            {
+                if (step.Simultaneous.Count == 0)
+                {
+                    throw ConfigException.MissingField($"themes.{name}.by_dj.{djId}.script[{i}].simultaneous（空グループ）");
+                }
+                voices = step.Simultaneous
+                    .Select((x, j) => MapScriptLine(x.Speaker, x.Line, name, djId, i, j))
+                    .ToList();
+            }
+            else
+            {
+                voices = new[] { MapScriptLine(step.Speaker, step.Line, name, djId, i, null) };
+            }
+            result.Add(new SpielStep(voices));
+        }
+        return result;
+    }
+
+    private static SpielLine MapScriptLine(string? speaker, string? line, string name, string djId, int stepIndex, int? voiceIndex)
+    {
+        var where = voiceIndex is int v
+            ? $"themes.{name}.by_dj.{djId}.script[{stepIndex}].simultaneous[{v}]"
+            : $"themes.{name}.by_dj.{djId}.script[{stepIndex}]";
+        if (string.IsNullOrEmpty(speaker))
+        {
+            throw ConfigException.MissingField($"{where}.speaker");
+        }
+        if (string.IsNullOrEmpty(line))
+        {
+            throw ConfigException.MissingField($"{where}.line");
+        }
+        return new SpielLine(speaker, line);
     }
 
     /// <summary>news: 単一の読み手（tagline 保持。announcement は実行時注入のため読まない）。</summary>
@@ -111,5 +161,20 @@ public static class ThemesConfig
     {
         public string? Tagline { get; set; }
         public string? Announcement { get; set; }
+        public List<ScriptStepDto>? Script { get; set; }  // W-OP 多声台本（announcement と排他）。
+    }
+
+    /// <summary>多声台本の 1 ステップ。単独行（<see cref="Speaker"/>/<see cref="Line"/>）か同時発話グループ（<see cref="Simultaneous"/>）のいずれか。</summary>
+    public sealed class ScriptStepDto
+    {
+        public string? Speaker { get; set; }
+        public string? Line { get; set; }
+        public List<ScriptLineDto>? Simultaneous { get; set; }
+    }
+
+    public sealed class ScriptLineDto
+    {
+        public string? Speaker { get; set; }
+        public string? Line { get; set; }
     }
 }

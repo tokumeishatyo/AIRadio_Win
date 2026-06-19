@@ -363,4 +363,241 @@ public class ProgramThemesConfigTests
         Assert.Equal("やあ", t.Greetings.Afternoon);       // 上書き
         Assert.Equal("こんばんは", t.Greetings.Evening);   // 欠落（null）→ 既定
     }
+
+    // --- themes.yaml 多声 OP 台本（W-OP: script / simultaneous） ---
+
+    [Fact]
+    public void Themes_Script_ParsesSingleAndSimultaneous()
+    {
+        const string yaml =
+"""
+opening:
+  track_uri: "spotify:track:O"
+  by_dj:
+    reimu:
+      script:
+        - speaker: reimu
+          line: "L1"
+        - simultaneous:
+            - speaker: reimu
+              line: "S1"
+            - speaker: marisa
+              line: "S2"
+news:
+  track_uri: "spotify:track:N"
+ending:
+  track_uri: "spotify:track:E"
+  by_dj:
+    zundamon:
+      announcement: "ED"
+""";
+
+        var t = ThemesConfig.FromYaml(yaml);
+        var reimu = t.Opening.ByDj["reimu"];
+
+        Assert.True(reimu.HasScript);
+        Assert.Equal("", reimu.Announcement); // script 時は空
+        Assert.Equal(2, reimu.Script!.Count);
+        // step 0: 単独行。
+        Assert.Single(reimu.Script[0].Voices);
+        Assert.Equal(new SpielLine("reimu", "L1"), reimu.Script[0].Voices[0]);
+        // step 1: 同時発話（2 声）。
+        Assert.Equal(2, reimu.Script[1].Voices.Count);
+        Assert.Equal(new SpielLine("reimu", "S1"), reimu.Script[1].Voices[0]);
+        Assert.Equal(new SpielLine("marisa", "S2"), reimu.Script[1].Voices[1]);
+    }
+
+    [Fact]
+    public void Themes_AnnouncementAndScriptBoth_ThrowsMissingField()
+    {
+        const string yaml =
+"""
+opening:
+  track_uri: "spotify:track:O"
+  by_dj:
+    reimu:
+      announcement: "A"
+      script:
+        - speaker: reimu
+          line: "L"
+news:
+  track_uri: "spotify:track:N"
+ending:
+  track_uri: "spotify:track:E"
+  by_dj:
+    zundamon:
+      announcement: "ED"
+""";
+
+        var ex = Assert.Throws<ConfigException>(() => ThemesConfig.FromYaml(yaml));
+        Assert.Equal("E-CFG-MISSING-FIELD-001", ex.Code);
+    }
+
+    [Fact]
+    public void Themes_EmptySimultaneousGroup_ThrowsMissingField()
+    {
+        const string yaml =
+"""
+opening:
+  track_uri: "spotify:track:O"
+  by_dj:
+    reimu:
+      script:
+        - simultaneous: []
+news:
+  track_uri: "spotify:track:N"
+ending:
+  track_uri: "spotify:track:E"
+  by_dj:
+    zundamon:
+      announcement: "ED"
+""";
+
+        var ex = Assert.Throws<ConfigException>(() => ThemesConfig.FromYaml(yaml));
+        Assert.Equal("E-CFG-MISSING-FIELD-001", ex.Code);
+    }
+
+    [Fact]
+    public void Themes_ScriptLineMissingSpeaker_ThrowsMissingField()
+    {
+        const string yaml =
+"""
+opening:
+  track_uri: "spotify:track:O"
+  by_dj:
+    reimu:
+      script:
+        - line: "L (speaker 無し)"
+news:
+  track_uri: "spotify:track:N"
+ending:
+  track_uri: "spotify:track:E"
+  by_dj:
+    zundamon:
+      announcement: "ED"
+""";
+
+        var ex = Assert.Throws<ConfigException>(() => ThemesConfig.FromYaml(yaml));
+        Assert.Equal("E-CFG-MISSING-FIELD-001", ex.Code);
+    }
+
+    [Fact]
+    public void Themes_ScriptStepMissingLine_ThrowsMissingField()
+    {
+        const string yaml =
+"""
+opening:
+  track_uri: "spotify:track:O"
+  by_dj:
+    reimu:
+      script:
+        - speaker: reimu
+news:
+  track_uri: "spotify:track:N"
+ending:
+  track_uri: "spotify:track:E"
+  by_dj:
+    zundamon:
+      announcement: "ED"
+""";
+
+        var ex = Assert.Throws<ConfigException>(() => ThemesConfig.FromYaml(yaml));
+        Assert.Equal("E-CFG-MISSING-FIELD-001", ex.Code);
+    }
+
+    [Fact]
+    public void Themes_SimultaneousEntryMissingSpeaker_ThrowsMissingField()
+    {
+        const string yaml =
+"""
+opening:
+  track_uri: "spotify:track:O"
+  by_dj:
+    reimu:
+      script:
+        - simultaneous:
+            - speaker: reimu
+              line: "S1"
+            - line: "S2 (speaker 無し)"
+news:
+  track_uri: "spotify:track:N"
+ending:
+  track_uri: "spotify:track:E"
+  by_dj:
+    zundamon:
+      announcement: "ED"
+""";
+
+        var ex = Assert.Throws<ConfigException>(() => ThemesConfig.FromYaml(yaml));
+        Assert.Equal("E-CFG-MISSING-FIELD-001", ex.Code);
+    }
+
+    [Fact]
+    public void Themes_ScriptEmptyList_TreatedAsAbsent_ThrowsMissingField()
+    {
+        // script: [] は script 不在扱い → announcement も無いので XOR 不成立で fail-fast。
+        const string yaml =
+"""
+opening:
+  track_uri: "spotify:track:O"
+  by_dj:
+    reimu:
+      script: []
+news:
+  track_uri: "spotify:track:N"
+ending:
+  track_uri: "spotify:track:E"
+  by_dj:
+    zundamon:
+      announcement: "ED"
+""";
+
+        var ex = Assert.Throws<ConfigException>(() => ThemesConfig.FromYaml(yaml));
+        Assert.Equal("E-CFG-MISSING-FIELD-001", ex.Code);
+    }
+
+    [Fact]
+    public void Themes_AnnouncementOnly_HasNoScript_BackwardCompatible()
+    {
+        // 既存の announcement のみのエントリは Script=null（後方互換）。
+        var t = ThemesConfig.FromYaml(MinimalThemes);
+        Assert.False(t.Opening.ByDj["zundamon"].HasScript);
+        Assert.Null(t.Opening.ByDj["zundamon"].Script);
+        Assert.Equal("OP", t.Opening.ByDj["zundamon"].Announcement);
+    }
+
+    [Fact]
+    public void Themes_ProductionThemesYaml_LoadsWithReimuScript()
+    {
+        // 実 config/themes.yaml をロードし、reimu が多声 OP（script）・他 DJ は announcement（Script=null）であることを検証。
+        var t = ThemesConfig.LoadFile(RepoConfig("themes.yaml"));
+
+        Assert.True(t.Opening.ByDj["reimu"].HasScript);
+        Assert.False(t.Opening.ByDj["zundamon"].HasScript);
+        Assert.False(t.Opening.ByDj["metan"].HasScript);
+        Assert.False(t.Opening.ByDj["tsumugi"].HasScript);
+
+        var script = t.Opening.ByDj["reimu"].Script!;
+        Assert.Equal(4, script.Count);
+        Assert.Equal("reimu", script[0].Voices[0].Speaker);   // ① 霊夢
+        Assert.Equal("marisa", script[1].Voices[0].Speaker);  // ② 魔理沙
+        Assert.Single(script[2].Voices);                      // ③ 本編（単独）
+        Assert.Equal(2, script[3].Voices.Count);              // ④ 二人同時
+    }
+
+    /// <summary>テスト実行ディレクトリから親を辿って実 config/&lt;name&gt; を見つける（本番設定の実ロード検証用）。</summary>
+    private static string RepoConfig(string name)
+    {
+        var dir = new DirectoryInfo(AppContext.BaseDirectory);
+        while (dir is not null)
+        {
+            var candidate = Path.Combine(dir.FullName, "config", name);
+            if (File.Exists(candidate))
+            {
+                return candidate;
+            }
+            dir = dir.Parent;
+        }
+        throw new FileNotFoundException($"config/{name} が見つかりません（リポジトリ構成を確認）。");
+    }
 }

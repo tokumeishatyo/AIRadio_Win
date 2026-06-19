@@ -139,6 +139,25 @@ public sealed class BroadcastEngine
         {
             throw ConfigException.MissingField($"program.news.dj_id に未定義の DJ: {newsDjId}");
         }
+        // W-OP: OP/ED の多声台本（script）が参照する speaker は全て djs に存在しなければならない（fail-fast）。
+        foreach (var (segName, seg) in new[] { ("opening", themes.Opening), ("ending", themes.Ending) })
+        {
+            foreach (var (djId, spiel) in seg.ByDj)
+            {
+                if (!spiel.HasScript)
+                {
+                    continue;
+                }
+                foreach (var voice in spiel.Script!.SelectMany(step => step.Voices))
+                {
+                    if (djs.All(d => d.Id != voice.Speaker))
+                    {
+                        throw ConfigException.MissingField(
+                            $"themes.{segName}.by_dj.{djId}.script の speaker に未定義の DJ: {voice.Speaker}");
+                    }
+                }
+            }
+        }
 
         // ゲストコーナー検証＋選定（W14）。実際にゲスト枠が出る放送のときだけ行う
         //（N<2 等でゲストが出ないなら、プール空でも誤って放送中止しない）。
@@ -571,15 +590,10 @@ public sealed class BroadcastEngine
         switch (segment.Kind)
         {
             case SegmentKind.Opening:
-            {
                 // その日のメインが読み、メインの口上を使う（無ければ anchor → 先頭の順。W13.5 §7）。
-                var opSpiel = themes.Opening.Spiel(main.Id, new[] { anchor.Id }) ?? new DjSpiel("");
-                var opStaging = themes.Opening.Staging with { Tagline = opSpiel.Tagline };
-                await _themeSequencer
-                    .RunAsync(opStaging, Expand(themes.Greetings, opSpiel.Announcement, extraValues), main.SpeakerId, ct)
-                    .ConfigureAwait(false);
+                // script があれば多声 OP（W-OP）、無ければ従来の単一 announcement。
+                await RunThemedAsync(themes.Opening, main, anchor, djs, themes.Greetings, extraValues, ct).ConfigureAwait(false);
                 break;
-            }
 
             case SegmentKind.Song:
                 // 選曲は先行準備済み（OP 前に確定している）。
@@ -622,15 +636,10 @@ public sealed class BroadcastEngine
                 break;
 
             case SegmentKind.Ending:
-            {
                 // ED もその日のメインが読み、メインの口上を使う（tagline なし）。無ければ anchor → 先頭（W13.5 §7）。
-                var edSpiel = themes.Ending.Spiel(main.Id, new[] { anchor.Id }) ?? new DjSpiel("");
-                var edStaging = themes.Ending.Staging with { Tagline = edSpiel.Tagline };
-                await _themeSequencer
-                    .RunAsync(edStaging, Expand(themes.Greetings, edSpiel.Announcement, extraValues), main.SpeakerId, ct)
-                    .ConfigureAwait(false);
+                // script があれば多声 ED（W-OP・本スライスの配置 config は OP のみ）、無ければ従来の単一 announcement。
+                await RunThemedAsync(themes.Ending, main, anchor, djs, themes.Greetings, extraValues, ct).ConfigureAwait(false);
                 break;
-            }
 
             case SegmentKind.ArtistFeature:
             {
@@ -663,6 +672,44 @@ public sealed class BroadcastEngine
             values[key] = value; // {first_song} 等が衝突時に優先（Mac の merge { _, new in new } と同義）。
         }
         return TemplateExpander.Expand(template, values);
+    }
+
+    /// <summary>
+    /// テーマ系セグメント（OP / ED）を実行する。その日のメインの口上を選び（無ければ anchor → 先頭）、
+    /// script があれば多声台本（W-OP）、無ければ従来の単一 announcement で <see cref="ThemeSequencer"/> を回す。
+    /// </summary>
+    private Task RunThemedAsync(ThemedSegment seg, DjProfile main, DjProfile anchor,
+        IReadOnlyList<DjProfile> djs, Greetings greetings, IReadOnlyDictionary<string, string> extra, CancellationToken ct)
+    {
+        var spiel = seg.Spiel(main.Id, new[] { anchor.Id }) ?? new DjSpiel("");
+        var staging = seg.Staging with { Tagline = spiel.Tagline };
+        if (spiel.HasScript)
+        {
+            var steps = ResolveSpokenSteps(spiel.Script!, djs, greetings, extra);
+            return _themeSequencer.RunAsync(staging, main.SpeakerId, steps, ct);
+        }
+        return _themeSequencer.RunAsync(staging, Expand(greetings, spiel.Announcement, extra), main.SpeakerId, ct);
+    }
+
+    /// <summary>
+    /// 多声台本の各行の speaker（DJ id）を <paramref name="djs"/> から SpeakerId へ解決し、テキストを発話直前展開する（W-OP §3-5）。
+    /// speaker の存在は preflight 済みのため前提（未定義はここには来ない）。展開は OP 実行時（このメソッド実行時）に行うため時刻/{first_song} が陳腐化しない。
+    /// </summary>
+    private IReadOnlyList<SpokenStep> ResolveSpokenSteps(IReadOnlyList<SpielStep> script,
+        IReadOnlyList<DjProfile> djs, Greetings greetings, IReadOnlyDictionary<string, string> extra)
+    {
+        var steps = new List<SpokenStep>(script.Count);
+        foreach (var step in script)
+        {
+            var voices = new List<VoiceLine>(step.Voices.Count);
+            foreach (var line in step.Voices)
+            {
+                var dj = djs.First(d => d.Id == line.Speaker);
+                voices.Add(new VoiceLine(dj.SpeakerId, Expand(greetings, line.Text, extra)));
+            }
+            steps.Add(new SpokenStep(voices));
+        }
+        return steps;
     }
 
     /// <summary>

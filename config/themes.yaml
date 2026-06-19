@@ -32,9 +32,20 @@ opening:
       tagline: "春日部つむぎの ケイラボAIラジオ"
       announcement: "{greeting}ー。{month}月{day}日、{ampm}{hour}時になりましたー。ケイラボAIラジオのお時間ですー。お送りするのは、あーし、春日部つむぎでーす。今日もリスナーのみんなと、まったり過ごしていきたいと思いますー。あ、この番組の音声合成にはVOICEVOXを使ってるんですよー。それでは早速、1曲目を聴いてくださーい。{first_song}。"
     # 霊夢・魔理沙（AquesTalk1, W-AQT）。火/木/土のメイン。音声合成クレジットは AquesTalk＋VOICEVOX（ニュースは龍星=VOICEVOX）。文言は仮（finalize）。
+    # reimu は多声 OP（W-OP）: 霊夢→魔理沙→霊夢本編→二人同時の台本。simultaneous は同時発話（PCM ミックス）。speaker は djs.yaml の id。
     reimu:
-      tagline: "博麗霊夢の ケイラボAIラジオ"
-      announcement: "{greeting}。{month}月{day}日、{ampm}{hour}時。ケイラボAIラジオの時間よ。お送りするのは私、博麗霊夢。今日も肩の力を抜いて、のんびり付き合ってちょうだい。ああ、この番組の音声合成には、AquesTalkとVOICEVOXを使ってるわ。それじゃ、まずは1曲目。{first_song}。"
+      script:
+        - speaker: reimu
+          line: "ゆっくり霊夢です。（仮）"
+        - speaker: marisa
+          line: "ゆっくり魔理沙だぜ。（仮）"
+        - speaker: reimu
+          line: "{greeting}。{month}月{day}日、{ampm}{hour}時。ケイラボAIラジオの時間よ。今日も肩の力を抜いて、のんびり付き合ってちょうだい。この番組の音声合成には、AquesTalkとVOICEVOXを使ってるわ。それじゃ、まずは1曲目。{first_song}。（仮）"
+        - simultaneous:
+            - speaker: reimu
+              line: "ゆっくりしていってね。（仮）"
+            - speaker: marisa
+              line: "ゆっくりしていってね。（仮）"
     marisa:
       tagline: "霧雨魔理沙の ケイラボAIラジオ"
       announcement: "{greeting}。{month}月{day}日、{ampm}{hour}時だぜ。ケイラボAIラジオの時間だ。お送りするのは私、霧雨魔理沙だぜ。今日も元気に、賑やかにいくぜ。音声合成にはAquesTalkとVOICEVOXを使ってるんだ。それじゃ、1曲目を聴いてくれ。{first_song}。"

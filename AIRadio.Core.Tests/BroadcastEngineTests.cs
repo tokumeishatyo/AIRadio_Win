@@ -193,6 +193,79 @@ public class BroadcastEngineTests
     }
 
     [Fact]
+    public async Task Opening_WithScript_DispatchesMultiVoice_ResolvesSpeakersAndExpands()
+    {
+        // W-OP: reimu メインの OP が script（多声台本）なら、各 step の speaker が SpeakerId に解決され、行ごとに展開される。
+        var djs = new[]
+        {
+            new DjProfile("reimu", "博麗霊夢", 1001, ""),
+            new DjProfile("marisa", "霧雨魔理沙", 1002, ""),
+            new DjProfile("zundamon", "ずんだもん", 3, ""),
+            new DjProfile("metan", "四国めたん", 2, ""),
+        };
+        var allReimu = new WeeklyCast(
+            Enum.GetValues<DayOfWeek>().ToDictionary(d => d, d => (IReadOnlyList<string>)new[] { "reimu", "marisa" }));
+        var blueprint = new ProgramBlueprint(
+            "ケイラボAIラジオ", "reimu", ProgramLength.FromCorners(1), true,
+            new SongSegmentSpec(SongFallback, "幕開け", 100, 30), "free_talk", "letter", NewsDjId: null)
+        {
+            WeeklyCast = allReimu,
+        };
+        var openingByDj = new Dictionary<string, DjSpiel>
+        {
+            ["reimu"] = new("", null, new[]
+            {
+                new SpielStep(new[] { new SpielLine("reimu", "ゆっくり霊夢です") }),
+                new SpielStep(new[] { new SpielLine("marisa", "ゆっくり魔理沙だぜ") }),
+                new SpielStep(new[] { new SpielLine("reimu", "{greeting}。今日もよろしく") }),
+            }),
+        };
+        var spotify = new FakeSpotifyController();
+        var h = BuildEngine(spotify, new FakeClock(), djs: djs);
+
+        await h.Engine.RunAsync(new ProgramPlan(blueprint, ProgramLength.FromCorners(1)),
+            MakeThemes(openingByDj: openingByDj), Corners, djs);
+
+        // OP の各 step は steps の先頭から順に再生される（tagline なし）。speaker が 1001/1002 に解決され、行ごとに展開。
+        var spoken = h.Audio.Played.Select(w => Encoding.UTF8.GetString(w)).ToList();
+        Assert.Equal("1001:ゆっくり霊夢です", spoken[0]);   // ① 霊夢（多声＝marisa が出る時点で announcement 経路ではない）
+        Assert.Equal("1002:ゆっくり魔理沙だぜ", spoken[1]); // ② 魔理沙
+        Assert.StartsWith("1001:", spoken[2]);              // ③ 本編は霊夢
+        Assert.Contains("今日もよろしく", spoken[2]);
+        Assert.DoesNotContain("{greeting}", spoken[2]);     // 行ごとに展開済み
+    }
+
+    [Fact]
+    public async Task Preflight_OpeningScriptUnknownSpeaker_FailsFast()
+    {
+        // W-OP: OP script が djs に無い speaker を参照 → 起動時 preflight で fail-fast。
+        var openingByDj = new Dictionary<string, DjSpiel>
+        {
+            ["zundamon"] = new("", null, new[] { new SpielStep(new[] { new SpielLine("ghost", "x") }) }),
+        };
+        var h = BuildEngine(new FakeSpotifyController(), new FakeClock());
+
+        var ex = await Assert.ThrowsAsync<ConfigException>(
+            () => h.Engine.RunAsync(MakePlan(ProgramLength.FromCorners(1)), MakeThemes(openingByDj: openingByDj), Corners, Djs));
+        Assert.Equal("E-CFG-MISSING-FIELD-001", ex.Code);
+    }
+
+    [Fact]
+    public async Task Preflight_EndingScriptUnknownSpeaker_FailsFast()
+    {
+        // W-OP: ED script も preflight 対象（OP と同列に検証される）。
+        var endingByDj = new Dictionary<string, DjSpiel>
+        {
+            ["zundamon"] = new("", null, new[] { new SpielStep(new[] { new SpielLine("ghost", "x") }) }),
+        };
+        var h = BuildEngine(new FakeSpotifyController(), new FakeClock());
+
+        var ex = await Assert.ThrowsAsync<ConfigException>(
+            () => h.Engine.RunAsync(MakePlan(ProgramLength.FromCorners(1)), MakeThemes(endingByDj: endingByDj), Corners, Djs));
+        Assert.Equal("E-CFG-MISSING-FIELD-001", ex.Code);
+    }
+
+    [Fact]
     public async Task News_ExpandsTimePlaceholders_TwoStage_ReadByAnchor()
     {
         // 二段展開: Provider 原稿に残った {hour12}/{minute} を、エンジンが発話直前に実時刻で展開する。

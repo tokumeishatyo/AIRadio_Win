@@ -349,10 +349,30 @@ public sealed class WeeklyCast
     });
 }
 
+/// <summary>多声 OP 台本の 1 発話行（話者 DJ id + セリフ。セリフは時刻等プレースホルダを含みうる＝発話直前展開。W-OP）。</summary>
+public sealed record SpielLine(string Speaker, string Text);
+
+/// <summary>
+/// 多声 OP 台本の 1 ステップ。<see cref="Voices"/> が 1 件＝単独発話、複数件＝同時発話（PCM ミックスして重ねる）。W-OP。
+/// ローダ（ThemesConfig）が Voices ≥ 1 を保証する。
+/// </summary>
+public sealed record SpielStep(IReadOnlyList<SpielLine> Voices);
+
 /// <summary>OP / ED の DJ 別固定口上（口調込み・YAML 由来で不変。W13.5 §2）。</summary>
-/// <param name="Announcement">本文（時刻プレースホルダ <c>{greeting}</c> 等・<c>{first_song}</c> を含み、発話直前に展開）。</param>
+/// <param name="Announcement">本文（時刻プレースホルダ <c>{greeting}</c> 等・<c>{first_song}</c> を含み、発話直前に展開）。<see cref="Script"/> 使用時は空。</param>
 /// <param name="Tagline">BGM 前の一言（OP のみ。ED は null）。</param>
-public sealed record DjSpiel(string Announcement, string? Tagline = null);
+/// <param name="Script">多声台本（W-OP）。非 null かつ非空なら <see cref="Announcement"/> の代わりに多声で読む（announcement と排他）。</param>
+public sealed record DjSpiel(string Announcement, string? Tagline = null, IReadOnlyList<SpielStep>? Script = null)
+{
+    /// <summary>多声台本（script）を持つか。true なら Announcement でなく Script を多声で読む（W-OP）。</summary>
+    public bool HasScript => Script is { Count: > 0 };
+}
+
+/// <summary>話者解決済みの 1 声（speaker_id + 展開済みテキスト）。<see cref="ThemeSequencer"/> 渡し用（W-OP）。</summary>
+public sealed record VoiceLine(int SpeakerId, string Text);
+
+/// <summary>話者解決済みの 1 ステップ（Voices 1 件＝単独・複数＝同時発話）。<see cref="ThemeSequencer"/> 渡し用（W-OP）。</summary>
+public sealed record SpokenStep(IReadOnlyList<VoiceLine> Voices);
 
 /// <summary>
 /// テーマ系セグメント（OP / ED）。BGM 演出（<see cref="Staging"/>）は共有、口上は DJ 別（その日のメインのものを使う。W13.5 §2）。
