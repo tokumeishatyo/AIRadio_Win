@@ -17,3 +17,18 @@ djs:
     name: "青山龍星"
     speaker_id: 13
     persona: "低く落ち着いた声のニュースキャスター。です・ます調で簡潔に、信頼感のある語り口。"
+  # --- AquesTalk1（初代・ゆっくりボイス）。W-AQT。声種は別 DLL（native/aqtk1/<voice>/）。 ---
+  # tts_backend: aquestalk のとき aquestalk_voice 必須。speaker_id は他 DJ と衝突しない一意 ID（ルーティングキー兼用）。
+  # 実機で発話させるには weekly_cast / コーナーの dj_ids / guests に割り当てる（キャスティングは別途・finalize）。
+  - id: reimu
+    name: "博麗霊夢"
+    speaker_id: 1001
+    persona: "一人称は「私」。落ち着いてやや素っ気ない、ツッコミ寄りの物言い。常識人で進行をまとめる。"
+    tts_backend: aquestalk
+    aquestalk_voice: f1
+  - id: marisa
+    name: "霧雨魔理沙"
+    speaker_id: 1002
+    persona: "一人称は「私」。語尾に「〜だぜ」「〜だな」を使う、明るく好奇心旺盛なボケ寄り。テンション高め。"
+    tts_backend: aquestalk
+    aquestalk_voice: f2

@@ -27,6 +27,9 @@ journal.local.yaml
 
 # ===== AquesTalk native binaries (licensed; not redistributed) =====
 native/
+# 展開した AquesTalk1 / AqKanji2Koe SDK（ライセンス品・CONFIDENTIAL・再頒布禁止）
+aqtk1_win/
+aqk2k_win/
 
 # ===== OS / editor =====
 Thumbs.db

@@ -25,6 +25,7 @@ internal sealed class BroadcastComposition
     /// <param name="control">「ED で終了」操作ハンドル（トレイから渡す。null なら ED 終了なし）。</param>
     public async Task RunAsync(CancellationToken ct, BroadcastControl? control = null)
     {
+        AquesTalk1Synthesizer? aquestalk = null;   // W-AQT: finally で Dispose（AqKanji2Koe Release ＋ 声種モジュール Free）。
         try
         {
             var spotifyPath = Path.Combine(_configDir, "spotify.local.yaml");
@@ -71,8 +72,14 @@ internal sealed class BroadcastComposition
             var searcher = new SpotifyWebSearcher(auth, http, spotifyConfig.Market);
             var catalog = new SpotifyArtistCatalog(auth, http, spotifyConfig.Market);
             var spotify = new WebApiSpotifyController(auth, http, preferredDeviceName: spotifyConfig.DeviceName);
-            var tts = new VoicevoxTTS(ttsConfig.Endpoint, http, ttsConfig.SpeedScale);
-            // 読み辞書の同期は TTS と同じ endpoint・http を共有（W19a §7）。
+            // TTS: VOICEVOX を基本に、djs/guests.yaml の tts_backend: aquestalk な DJ を AquesTalk1 へ振り分ける（W-AQT）。
+            // speaker_id マップは djs ∪ guests から構築（一意性違反は ConfigException＝fail-fast・WAQT-3）。
+            var voiceMap = RoutingTTS.BuildVoiceMap(djs.Concat(guests));
+            aquestalk = voiceMap.Count > 0 ? TryBuildAquesTalk(ttsConfig) : null;
+            var tts = new RoutingTTS(
+                new VoicevoxTTS(ttsConfig.Endpoint, http, ttsConfig.SpeedScale),
+                aquestalk, voiceMap, _log.Log);
+            // 読み辞書の同期は VOICEVOX と同じ endpoint・http を共有（W19a §7）。AquesTalk は対象外（VOICEVOX 専用辞書）。
             var userDict = new VoicevoxUserDict(ttsConfig.Endpoint, http);
             var audio = new NAudioPlayer((float)ttsConfig.PlaybackVolume);
             var llm = new GeminiLLMBackend(llmConfig, http);
@@ -133,6 +140,42 @@ internal sealed class BroadcastComposition
         {
             // 設定不正（fail-fast）/ critical セグメント中止 等。
             _log.Log($"エラー [{ex.Code}]: {ex.Message}");
+        }
+        finally
+        {
+            // AquesTalk リソース解放（AqKanji2Koe Release ＋ 声種モジュール Free。W-AQT）。
+            aquestalk?.Dispose();
+        }
+    }
+
+    /// <summary>
+    /// AquesTalk 合成器を構築する（W-AQT）。DLL/辞書不在・初期化失敗は <c>null</c>（当該 DJ 無音・放送継続）。
+    /// dev key 未設定は WARN（T04・評価版でナ/マ行→ヌ）。所有権は呼び出し側（<see cref="RunAsync"/> の finally で Dispose）。
+    /// </summary>
+    private AquesTalk1Synthesizer? TryBuildAquesTalk(TtsConfig ttsConfig)
+    {
+        try
+        {
+            var baseDir = AppContext.BaseDirectory;
+            var keys = AquesTalkLocalConfig.LoadFile(Path.Combine(_configDir, "aquestalk.local.yaml"));
+            if (string.IsNullOrEmpty(keys.AquesTalkDevKey) || string.IsNullOrEmpty(keys.AqKanji2KoeDevKey))
+            {
+                _log.Log("⚠ AquesTalk 評価版動作: dev key 未設定でナ/マ行が「ヌ」化します（config/aquestalk.local.yaml）。");
+            }
+            var native = new AquesTalk1Native(
+                Path.Combine(baseDir, ttsConfig.AquesTalkVoicesDir),
+                Path.Combine(baseDir, ttsConfig.AquesTalkDictDir),
+                keys.AquesTalkDevKey, keys.AquesTalkUsrKey);
+            return new AquesTalk1Synthesizer(
+                native,
+                Path.Combine(baseDir, ttsConfig.AquesTalkDictDir, "aq_dic"),
+                keys.AqKanji2KoeDevKey, ttsConfig.AquesTalkSpeed);
+        }
+        catch (Exception ex)
+        {
+            // DLL/辞書不在・初期化失敗 → 当該 DJ は無音で継続（fail-tolerant・spec §5-3）。
+            _log.Log($"⚠ AquesTalk エンジンの初期化に失敗しました（該当 DJ は無音で継続）: {ex.Message}");
+            return null;
         }
     }
 

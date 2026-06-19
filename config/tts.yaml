@@ -12,3 +12,13 @@ voicevox:
 playback_volume: 1.0
 # 話速（1.0 = 標準、0.5〜2.0）。1.1〜1.3 がテンポの良いラジオの目安。
 speed_scale: 1.15
+
+# AquesTalk1（初代 TTS・W-AQT。djs.yaml/guests.yaml の tts_backend: aquestalk な DJ で使用）。
+# 声種DLL・辞書は native/（BYO・gitignore 対象）に配置する:
+#   voices_dir 下に <声種>/AquesTalk.dll（f1/f2/f3/m1/m2/dvd/imd1/jgr/r1）
+#   dict_dir 下に AqKanji2Koe.dll と aq_dic/（aqdic.bin, aq_user.dic, CREDITS）
+# ライセンスキーは config/aquestalk.local.yaml（gitignore）で別途設定（.sample 参照）。
+aquestalk:
+  voices_dir: "native/aqtk1"
+  dict_dir: "native/aqk2k"
+  speed: 100   # 発話速度[%] 50-300（100=標準）

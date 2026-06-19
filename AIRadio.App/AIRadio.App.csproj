@@ -30,6 +30,9 @@
   <ItemGroup>
     <!-- 実行ファイル隣（出力ディレクトリ）に config/ を配置し、tts.yaml 等を実行時に読む（Mac 同一レイアウト）。 -->
     <Content Include="..\config\**\*.yaml" Link="config\%(RecursiveDir)%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" />
+    <!-- AquesTalk1 ネイティブ（BYO・.gitignore 対象・W-AQT）。出力 native/ に複製し AppContext.BaseDirectory から解決する。
+         native/ が空／不在のユーザー（DLL 未配置）でも glob は無害（何もコピーしない）。 -->
+    <Content Include="..\native\**\*.*" Link="native\%(RecursiveDir)%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 
 </Project>

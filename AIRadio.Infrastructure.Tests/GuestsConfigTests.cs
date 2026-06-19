@@ -45,4 +45,31 @@ public class GuestsConfigTests
         var ex = Assert.Throws<ConfigException>(() => GuestsConfig.FromYaml(yaml));
         Assert.Equal("E-CFG-MISSING-FIELD-001", ex.Code);
     }
+
+    // --- W-AQT: tts_backend / aquestalk_voice（djs と共通ヘルパ） ---
+
+    [Fact]
+    public void Guests_AquesTalkBackend_ReadsVoice_AndDefaultsVoicevox()
+    {
+        const string yaml =
+            "guests:\n" +
+            "  - id: reimu\n    name: \"博麗霊夢\"\n    speaker_id: 1001\n    tts_backend: aquestalk\n    aquestalk_voice: f1\n" +
+            "  - id: sora\n    name: \"九州そら\"\n    speaker_id: 16\n";
+
+        var guests = GuestsConfig.FromYaml(yaml);
+
+        Assert.Equal("aquestalk", guests[0].TtsBackend);
+        Assert.Equal("f1", guests[0].AquesTalkVoice);
+        Assert.Equal("voicevox", guests[1].TtsBackend);   // 省略は voicevox
+        Assert.Null(guests[1].AquesTalkVoice);
+    }
+
+    [Fact]
+    public void Guests_AquesTalkWithoutVoice_ThrowsMissingField()
+    {
+        const string yaml = "guests:\n  - id: reimu\n    name: \"博麗霊夢\"\n    speaker_id: 1001\n    tts_backend: aquestalk\n";
+
+        var ex = Assert.Throws<ConfigException>(() => GuestsConfig.FromYaml(yaml));
+        Assert.Equal("E-CFG-MISSING-FIELD-001", ex.Code);
+    }
 }

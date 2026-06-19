@@ -1,7 +1,13 @@
 namespace AIRadio.Core;
 
-/// <summary>番組 DJ のプロフィール（<c>config/djs.yaml</c>）。</summary>
-public sealed record DjProfile(string Id, string Name, int SpeakerId, string Persona);
+/// <summary>
+/// 番組 DJ のプロフィール（<c>config/djs.yaml</c>）。
+/// <paramref name="TtsBackend"/>（既定 <c>"voicevox"</c>）と <paramref name="AquesTalkVoice"/> は W-AQT の任意フィールド
+/// （末尾 optional positional・後方互換）。<c>aquestalk</c> のとき <paramref name="AquesTalkVoice"/> に声種（f1/f2/…）を持つ。
+/// </summary>
+public sealed record DjProfile(
+    string Id, string Name, int SpeakerId, string Persona,
+    string TtsBackend = "voicevox", string? AquesTalkVoice = null);
 
 /// <summary>会話台本の 1 行（どの DJ が何を喋るか）。</summary>
 public sealed record DialogueLine(string DjId, string Text);

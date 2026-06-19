@@ -1,0 +1,13 @@
+# AquesTalk1 / AqKanji2Koe ライセンスキー（機密・W-AQT）
+#
+# このファイルを config/aquestalk.local.yaml にコピーしてキーを記入する。
+# aquestalk.local.yaml は .gitignore 対象（*.local.yaml）なのでコミットされない。
+# コミットするのはこの .sample（空キー・機密なし）だけ。
+#
+# 重要:
+#   - dev key 未設定だと評価版動作になり、ナ行・マ行がすべて「ヌ」になる。
+#     AquesTalk1（合成段）と AqKanji2Koe（漢字→かな段）の両方の dev key が必要。
+#   - usr key 未設定だと音声に透かし（無音域のランダム挿入）が入る（配布時に必要）。
+aquestalk_dev_key: ""      # AquesTalk1 開発キー（合成段の評価制限ナ/マ行→ヌ を解除）
+aquestalk_usr_key: ""      # AquesTalk1 使用キー（音声透かしを除去）
+aqkanji2koe_dev_key: ""    # AqKanji2Koe 開発キー（漢字→koe 段の評価制限ナ/マ行→ヌ を解除）

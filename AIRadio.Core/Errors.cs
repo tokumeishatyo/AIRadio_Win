@@ -71,6 +71,24 @@ public sealed class TtsException : RadioException
     /// <summary>合成 API がエラー応答／解釈不能。</summary>
     public static TtsException SynthesisFailed(string detail) =>
         new("E-TTS-SYNTHESIS-FAILED-001", $"音声合成に失敗しました: {detail}");
+
+    // ===== AquesTalk1（W-AQT）。実行時失敗は fail-tolerant（throw → 非 critical セグメント握り潰しで放送継続）。 =====
+
+    /// <summary>AquesTalk / AqKanji2Koe の DLL ロード失敗（不在・x86/x64 不一致）。</summary>
+    public static TtsException AquesTalkLoadFailed(string detail) =>
+        new("E-TTS-AQT-LOAD-FAILED-001", $"AquesTalk の DLL をロードできません: {detail}");
+
+    /// <summary>AqKanji2Koe インスタンス生成失敗（辞書 path 不正・破損）。</summary>
+    public static TtsException AquesTalkInitFailed(string detail) =>
+        new("E-TTS-AQT-INIT-FAILED-001", $"AqKanji2Koe の初期化に失敗しました: {detail}");
+
+    /// <summary>漢字 → 音声記号列の変換失敗（AqKanji2Koe_Convert）。</summary>
+    public static TtsException AquesTalkKanaFailed(string detail) =>
+        new("E-TTS-AQT-KANA-FAILED-001", $"漢字→かな（音声記号列）変換に失敗しました: {detail}");
+
+    /// <summary>AquesTalk 合成失敗（AquesTalk_Synthe が NULL・記号列不正等）。</summary>
+    public static TtsException AquesTalkSynthesisFailed(string detail) =>
+        new("E-TTS-AQT-SYNTHESIS-FAILED-001", $"AquesTalk 合成に失敗しました: {detail}");
 }
 
 /// <summary>

@@ -57,4 +57,40 @@ public class TtsConfigTests
         var ex = Assert.Throws<ConfigException>(() => TtsConfig.FromYaml("playback_volume: 1.0\n"));
         Assert.Equal("E-CFG-MISSING-FIELD-001", ex.Code);
     }
+
+    // --- W-AQT: aquestalk: 節 ---
+
+    [Fact]
+    public void FromYaml_ReadsAquesTalkSection_WhenPresent()
+    {
+        var yaml =
+            "voicevox:\n  endpoint: \"http://x/\"\n" +
+            "aquestalk:\n  voices_dir: \"native/aqtk1\"\n  dict_dir: \"native/aqk2k\"\n  speed: 130\n";
+
+        var cfg = TtsConfig.FromYaml(yaml);
+
+        Assert.Equal("native/aqtk1", cfg.AquesTalkVoicesDir);
+        Assert.Equal("native/aqk2k", cfg.AquesTalkDictDir);
+        Assert.Equal(130, cfg.AquesTalkSpeed);
+    }
+
+    [Fact]
+    public void FromYaml_AquesTalkDefaults_WhenSectionMissing()
+    {
+        var cfg = TtsConfig.FromYaml("voicevox:\n  endpoint: \"http://x/\"\n");
+
+        Assert.Equal("native/aqtk1", cfg.AquesTalkVoicesDir);
+        Assert.Equal("native/aqk2k", cfg.AquesTalkDictDir);
+        Assert.Equal(100, cfg.AquesTalkSpeed);   // 既定 100
+    }
+
+    [Fact]
+    public void FromYaml_AquesTalkSpeed_ClampedTo50_300()
+    {
+        var lo = TtsConfig.FromYaml("voicevox:\n  endpoint: \"http://x/\"\naquestalk:\n  speed: 10\n");
+        var hi = TtsConfig.FromYaml("voicevox:\n  endpoint: \"http://x/\"\naquestalk:\n  speed: 999\n");
+
+        Assert.Equal(50, lo.AquesTalkSpeed);
+        Assert.Equal(300, hi.AquesTalkSpeed);
+    }
 }

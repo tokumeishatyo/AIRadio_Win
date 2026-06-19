@@ -215,4 +215,51 @@ public class DjsCornersConfigTests
         var c = CornersConfig.FromYaml(yaml)[0];
         Assert.Null(c.ArtistFeatureParams);
     }
+
+    // --- W-AQT: tts_backend / aquestalk_voice ---
+
+    [Fact]
+    public void Djs_DefaultTtsBackend_IsVoicevox_WhenOmitted()
+    {
+        // tts_backend 省略は voicevox（後方互換。既存 yaml 無改修で通る）。
+        const string yaml = "djs:\n  - id: zundamon\n    name: \"ずんだもん\"\n    speaker_id: 3\n    persona: \"p\"\n";
+
+        var dj = DjsConfig.FromYaml(yaml)[0];
+
+        Assert.Equal("voicevox", dj.TtsBackend);
+        Assert.Null(dj.AquesTalkVoice);
+    }
+
+    [Fact]
+    public void Djs_AquesTalkBackend_ReadsVoice()
+    {
+        const string yaml =
+            "djs:\n  - id: reimu\n    name: \"博麗霊夢\"\n    speaker_id: 1001\n    persona: \"p\"\n" +
+            "    tts_backend: aquestalk\n    aquestalk_voice: f1\n";
+
+        var dj = DjsConfig.FromYaml(yaml)[0];
+
+        Assert.Equal("aquestalk", dj.TtsBackend);
+        Assert.Equal("f1", dj.AquesTalkVoice);
+    }
+
+    [Fact]
+    public void Djs_AquesTalkWithoutVoice_ThrowsMissingField()
+    {
+        const string yaml =
+            "djs:\n  - id: reimu\n    name: \"博麗霊夢\"\n    speaker_id: 1001\n    persona: \"p\"\n    tts_backend: aquestalk\n";
+
+        var ex = Assert.Throws<ConfigException>(() => DjsConfig.FromYaml(yaml));
+        Assert.Equal("E-CFG-MISSING-FIELD-001", ex.Code);
+    }
+
+    [Fact]
+    public void Djs_UnknownTtsBackend_ThrowsMissingField()
+    {
+        const string yaml =
+            "djs:\n  - id: x\n    name: \"X\"\n    speaker_id: 3\n    persona: \"p\"\n    tts_backend: bogus\n";
+
+        var ex = Assert.Throws<ConfigException>(() => DjsConfig.FromYaml(yaml));
+        Assert.Equal("E-CFG-MISSING-FIELD-001", ex.Code);
+    }
 }

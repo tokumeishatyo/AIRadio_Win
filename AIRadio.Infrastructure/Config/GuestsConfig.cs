@@ -38,7 +38,8 @@ public static class GuestsConfig
             throw ConfigException.MissingField($"guests[{g.Id}].speaker_id");
         }
         // persona は任意（既定 ""）。レギュラー（djs）と違い必須にしない。
-        return new DjProfile(g.Id, g.Name, g.SpeakerId.Value, g.Persona ?? "");
+        var (ttsBackend, aquestalkVoice) = DjsConfig.ResolveTtsBackend(g.TtsBackend, g.AquestalkVoice, $"guests[{g.Id}]");
+        return new DjProfile(g.Id, g.Name, g.SpeakerId.Value, g.Persona ?? "", ttsBackend, aquestalkVoice);
     }
 
     public sealed class Dto
@@ -52,5 +53,7 @@ public static class GuestsConfig
         public string? Name { get; set; }
         public int? SpeakerId { get; set; }
         public string? Persona { get; set; }
+        public string? TtsBackend { get; set; }       // W-AQT: voicevox|aquestalk（既定 voicevox）。yaml tts_backend
+        public string? AquestalkVoice { get; set; }    // W-AQT: 声種 f1/f2/…（aquestalk のとき必須）。yaml aquestalk_voice
     }
 }
