@@ -31,6 +31,13 @@ opening:
     tsumugi:
       tagline: "春日部つむぎの ケイラボAIラジオ"
       announcement: "{greeting}ー。{month}月{day}日、{ampm}{hour}時になりましたー。ケイラボAIラジオのお時間ですー。お送りするのは、あーし、春日部つむぎでーす。今日もリスナーのみんなと、まったり過ごしていきたいと思いますー。あ、この番組の音声合成にはVOICEVOXを使ってるんですよー。それでは早速、1曲目を聴いてくださーい。{first_song}。"
+    # 霊夢・魔理沙（AquesTalk1, W-AQT）。火/木/土のメイン。音声合成クレジットは AquesTalk＋VOICEVOX（ニュースは龍星=VOICEVOX）。文言は仮（finalize）。
+    reimu:
+      tagline: "博麗霊夢の ケイラボAIラジオ"
+      announcement: "{greeting}。{month}月{day}日、{ampm}{hour}時。ケイラボAIラジオの時間よ。お送りするのは私、博麗霊夢。今日も肩の力を抜いて、のんびり付き合ってちょうだい。ああ、この番組の音声合成には、AquesTalkとVOICEVOXを使ってるわ。それじゃ、まずは1曲目。{first_song}。"
+    marisa:
+      tagline: "霧雨魔理沙の ケイラボAIラジオ"
+      announcement: "{greeting}。{month}月{day}日、{ampm}{hour}時だぜ。ケイラボAIラジオの時間だ。お送りするのは私、霧雨魔理沙だぜ。今日も元気に、賑やかにいくぜ。音声合成にはAquesTalkとVOICEVOXを使ってるんだ。それじゃ、1曲目を聴いてくれ。{first_song}。"
 
 # news は staging（+tagline）のみ。announcement は実行時に取得したニュース・天気原稿で差し替える（読み手は龍星固定）。
 news:
@@ -55,3 +62,8 @@ ending:
       announcement: "本日も最後までお聴きいただき、ありがとうございましたわ。また次回お会いしましょう。それでは、ごきげんよう。"
     tsumugi:
       announcement: "本日も最後まで聴いてくれて、ありがとうございましたー。また次回、お会いしましょうー。それでは、あーしたちと、またねー。"
+    # 霊夢・魔理沙（AquesTalk1, W-AQT）。文言は仮（finalize）。
+    reimu:
+      announcement: "今日も最後まで付き合ってくれてありがとう。また次回、ここで会いましょう。それじゃ、おやすみなさい。"
+    marisa:
+      announcement: "今日も最後まで聴いてくれて助かったぜ。また次回、楽しみにしててくれ。それじゃ、またなー。"
