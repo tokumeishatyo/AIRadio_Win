@@ -72,6 +72,9 @@ public sealed class BroadcastEngine
     /// <summary>ハイライト要約器（W18。null＝ジャーナル無効）。</summary>
     private readonly JournalSummarizer? _journalSummarizer;
 
+    /// <summary>掛け合いルール集（W-DLG。null＝掛け合い無効＝注入なし）。</summary>
+    private readonly BanterDirectives? _banterDirectives;
+
     /// <param name="songPicker">冒頭曲の選曲（null・失敗時は <see cref="SongSegmentSpec.FallbackTrackUri"/> に倒す）。</param>
     /// <param name="newsAnnouncement">
     /// ニュース原稿を返すデリゲート。Core は Infrastructure（<c>NewsWeatherProvider</c>）を参照できないため
@@ -94,7 +97,8 @@ public sealed class BroadcastEngine
         Func<int, int>? randomIndex = null,
         ArtistFeatureEngine? artistFeatureRunner = null,
         IJournalStore? journalStore = null,
-        JournalSummarizer? journalSummarizer = null)
+        JournalSummarizer? journalSummarizer = null,
+        BanterDirectives? banterDirectives = null)
     {
         _themeSequencer = themeSequencer;
         _cornerRunner = cornerRunner;
@@ -108,6 +112,7 @@ public sealed class BroadcastEngine
         _artistFeatureRunner = artistFeatureRunner;
         _journalStore = journalStore;
         _journalSummarizer = journalSummarizer;
+        _banterDirectives = banterDirectives;
     }
 
     /// <summary>番組を 1 本通しで実行する（単一のキャンセル可能 Task として呼ばれる前提）。</summary>
@@ -259,6 +264,8 @@ public sealed class BroadcastEngine
         var greeting = TimePhrases.Values(_clock.Now, themes.Greetings, _timeZone).GetValueOrDefault("greeting");
         // 前回までの振り返り（長期記憶。当週のハイライトを冒頭コーナーの準備にのみ渡す。読み込み失敗は無視＝fail-tolerant。W18 §5/§6）。
         var journalContext = JournalContextFromCurrentWeek();
+        // 掛け合い指示（W-DLG）。当日 cast（DjProfile・先頭=main）から一度だけ解決し、free_talk トークに注入する。合致なしは ""（注入なし）。
+        var banterDirective = (_banterDirectives ?? BanterDirectives.Empty).Resolve(cast) ?? "";
 
         // ローリング準備の起動（単一消費者なので進捗はローカル変数で追う）。
         var preparationStartedThrough = -1;
@@ -272,7 +279,7 @@ public sealed class BroadcastEngine
                 {
                     return; // 有限番組の末尾（ED の次）に到達。
                 }
-                StartPreparation(index, seg, corners, djs, songContext, castDjIds, firstTalkIndex, greeting, journalContext, plan.Blueprint.GuestCornerId, guest, artist, ledger, ct);
+                StartPreparation(index, seg, corners, djs, songContext, castDjIds, firstTalkIndex, greeting, journalContext, banterDirective, plan.Blueprint.GuestCornerId, guest, artist, ledger, ct);
             }
         }
 
@@ -415,6 +422,7 @@ public sealed class BroadcastEngine
         int firstTalkIndex,
         string? greeting,
         string journalContext,
+        string banterDirective,
         string? guestCornerId,
         DjProfile? guest,
         ArtistProfile? artist,
@@ -440,7 +448,9 @@ public sealed class BroadcastEngine
                         CastDjIds: castDjIds,
                         Greeting: isFirstTalk ? greeting : null,
                         LeadIn: isFirstTalk ? null : corner.LeadIn,
-                        JournalContext: isFirstTalk ? journalContext : null);
+                        JournalContext: isFirstTalk ? journalContext : null,
+                        // 掛け合い指示は free_talk のみ（letter は対象外）。当日 cast に合致しなければ "" で実質無注入（W-DLG §3-4）。
+                        BanterDirective: corner.Format == CornerFormat.FreeTalk ? banterDirective : null);
                 }
                 var talkToken = ledger.BeginPreparation(index, ct);
                 ledger.AddCorner(index, PrepareCornerAsync(corner, djs, context, index, ledger, talkToken));

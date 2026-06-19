@@ -87,9 +87,47 @@ public sealed record ArtistFeatureParams(
 /// <param name="LeadIn">その他コーナーの時報リード文テンプレート（発話直前に展開・合成）。</param>
 /// <param name="Guest">ゲストコーナー（W14）のみ非 null（選定済みゲスト。<c>djs</c> に居ないため別持ち）。cast 末尾に足す。</param>
 /// <param name="JournalContext">冒頭コーナー（W18）のみ非 null/非空（前回までの当週ハイライト振り返り）。台本プロンプトに軽く一言注入する。</param>
+/// <param name="BanterDirective">掛け合い指示（W-DLG）。free_talk コーナーのみ非 null/非空（当日キャストに合う掛け合いルールの指示文）。台本プロンプトに注入する。</param>
 public sealed record CornerContext(
     IReadOnlyList<string>? CastDjIds = null,
     string? Greeting = null,
     string? LeadIn = null,
     DjProfile? Guest = null,
-    string? JournalContext = null);
+    string? JournalContext = null,
+    string? BanterDirective = null);
+
+/// <summary>掛け合いルール（W-DLG。<see cref="Main"/> が当日 cast の先頭かつ <see cref="Requires"/> が全員 cast に在席すると <see cref="Directive"/> を注入）。</summary>
+public sealed record BanterRule(string Main, IReadOnlyList<string> Requires, string Directive);
+
+/// <summary>
+/// 掛け合いルール集（W-DLG。config 由来・純粋ロジック）。当日 cast に合致するルールの指示文を返す。
+/// 実差し替え境界ではない（実装 1 個・外部依存ゼロ）ため interface 化しない（§3-5）。
+/// </summary>
+public sealed class BanterDirectives
+{
+    private readonly IReadOnlyList<BanterRule> _rules;
+
+    public BanterDirectives(IReadOnlyList<BanterRule> rules) => _rules = rules;
+
+    /// <summary>ルールなし（banter.yaml 不在・無効時。注入なし＝従来挙動）。</summary>
+    public static BanterDirectives Empty { get; } = new(Array.Empty<BanterRule>());
+
+    /// <summary>cast[0]=main。main 一致かつ Requires 全員在席の最初のルールの Directive を返す。合致なしは null（fail-soft）。</summary>
+    public string? Resolve(IReadOnlyList<DjProfile> cast)
+    {
+        if (cast.Count == 0)
+        {
+            return null;
+        }
+        var mainId = cast[0].Id;
+        var ids = cast.Select(d => d.Id).ToHashSet(StringComparer.Ordinal);
+        foreach (var rule in _rules)
+        {
+            if (string.Equals(rule.Main, mainId, StringComparison.Ordinal) && rule.Requires.All(ids.Contains))
+            {
+                return rule.Directive;
+            }
+        }
+        return null;
+    }
+}

@@ -109,6 +109,8 @@ internal sealed class BroadcastComposition
             // 長期記憶（W18）。journal.local.yaml（gitignore・人為削除で即クリア）。要約は temp 0.6（Mac 一致）。
             var journalStore = new YamlJournalStore(Path.Combine(_configDir, "journal.local.yaml"));
             var journalSummarizer = new JournalSummarizer(llm);
+            // 掛け合い指示（W-DLG）。banter.yaml（任意・不在なら Empty＝注入なし）。
+            var banterDirectives = BanterConfig.LoadFile(Path.Combine(_configDir, "banter.yaml"));
 
             var engine = new BroadcastEngine(
                 themeSequencer,
@@ -120,7 +122,8 @@ internal sealed class BroadcastComposition
                 onEvent: e => _log.Log(FormatBroadcastEvent(e)),
                 artistFeatureRunner: artistFeatureEngine,
                 journalStore: journalStore,
-                journalSummarizer: journalSummarizer);
+                journalSummarizer: journalSummarizer,
+                banterDirectives: banterDirectives);
 
             var lengthLabel = plan.Length.IsEndless ? "エンドレス" : $"トーク{plan.Length.Corners}本";
             var countLabel = plan.TotalSegmentCount is int total ? $"・{total} セグメント" : "";

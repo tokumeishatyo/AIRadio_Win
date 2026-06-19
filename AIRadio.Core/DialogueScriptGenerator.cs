@@ -20,9 +20,9 @@ public sealed class DialogueScriptGenerator
     public async Task<DialogueScript> GenerateAsync(
         CornerTemplate corner, IReadOnlyList<DjProfile> djs, TrackInfo song, string? theme = null,
         string dateContext = "", ListenerLetter? letter = null, string? greeting = null, DjProfile? guest = null,
-        string journalContext = "", CancellationToken ct = default)
+        string journalContext = "", string banterDirective = "", CancellationToken ct = default)
     {
-        var request = MakeRequest(corner, djs, song, theme, dateContext, letter, greeting, guest, journalContext, _temperature);
+        var request = MakeRequest(corner, djs, song, theme, dateContext, letter, greeting, guest, journalContext, banterDirective, _temperature);
         var raw = await _llm.GenerateAsync(request, ct).ConfigureAwait(false);
         return Parse(raw, djs);
     }
@@ -33,10 +33,11 @@ public sealed class DialogueScriptGenerator
     /// <param name="greeting">冒頭コーナーのみ非 null（時刻連動の挨拶語）。非 null＝挨拶＋出演者紹介、null＝挨拶抑制で即本題。</param>
     /// <param name="guest">ゲストコーナーのみ非 null（迎えるゲスト）。専門家フレーミング制約を付与（W14 §4）。</param>
     /// <param name="journalContext">冒頭コーナーのみ非空（前回までの当週ハイライト振り返り。W18 §4。dateContext と同型の注入経路）。</param>
+    /// <param name="banterDirective">掛け合い指示（W-DLG）。free_talk のみ非空（当日キャストの掛け合いルール指示文）。非空なら制約として注入する。</param>
     public static LLMRequest MakeRequest(
         CornerTemplate corner, IReadOnlyList<DjProfile> djs, TrackInfo song, string? theme = null,
         string dateContext = "", ListenerLetter? letter = null, string? greeting = null, DjProfile? guest = null,
-        string journalContext = "", double temperature = 0.9)
+        string journalContext = "", string banterDirective = "", double temperature = 0.9)
     {
         var selectedTheme = theme ?? corner.Theme;
         var names = string.Join("」「", djs.Select(d => d.Name));
@@ -110,6 +111,11 @@ public sealed class DialogueScriptGenerator
         if (dateContext.Length > 0)
         {
             constraints.Add("季節や時候の話は、上の日付・季節に合わせる。");
+        }
+        // 掛け合い指示（W-DLG）。config 由来の指示文をそのまま 1 制約として追加（free_talk のみ・engine 側で範囲限定済み）。
+        if (!string.IsNullOrEmpty(banterDirective))
+        {
+            constraints.Add(banterDirective);
         }
         constraints.Add(songInstruction);
         sections.Add("# 制約\n" + string.Join("\n", constraints.Select(c => $"- {c}")));

@@ -56,6 +56,48 @@ public class DialogueScriptGeneratorTests
         Assert.Contains("放送作家", request.System!);          // system プロンプト
         Assert.DoesNotContain("# 今日の日付と季節", request.Prompt); // dateContext 未指定なら季節節なし
         Assert.Contains("# テーマ", request.Prompt);
+        Assert.DoesNotContain("掛け合い", request.Prompt); // banterDirective 未指定なら掛け合い指示なし（W-DLG 後方互換）
+    }
+
+    [Fact]
+    public void MakeRequest_WithBanterDirective_IncludesItInPrompt()
+    {
+        var corner = new CornerTemplate(
+            "free_talk", "フリートーク", "音楽", CornerFormat.FreeTalk,
+            new[] { "zundamon", "metan" }, "spotify:track:fb");
+        var song = new TrackInfo("spotify:track:x", "アイドル", "YOASOBI");
+
+        var request = DialogueScriptGenerator.MakeRequest(
+            corner, Djs, song, theme: "音楽", banterDirective: "霊夢が問いかけ、魔理沙が答える掛け合い。");
+
+        Assert.Contains("霊夢が問いかけ、魔理沙が答える掛け合い。", request.Prompt); // W-DLG: config 指示文がそのまま制約に
+    }
+
+    [Fact]
+    public void MakeRequest_WithoutBanterDirective_DoesNotInject()
+    {
+        var corner = new CornerTemplate(
+            "free_talk", "フリートーク", "音楽", CornerFormat.FreeTalk,
+            new[] { "zundamon", "metan" }, "spotify:track:fb");
+        var song = new TrackInfo("spotify:track:x", "アイドル", "YOASOBI");
+
+        var request = DialogueScriptGenerator.MakeRequest(corner, Djs, song, theme: "音楽");
+
+        Assert.DoesNotContain("掛け合い", request.Prompt);
+    }
+
+    [Fact]
+    public void MakeRequest_WithEmptyBanterDirective_DoesNotInject()
+    {
+        // 明示的に空文字を渡しても、省略時と同じく非注入（!IsNullOrEmpty ガード）。
+        var corner = new CornerTemplate(
+            "free_talk", "フリートーク", "音楽", CornerFormat.FreeTalk,
+            new[] { "zundamon", "metan" }, "spotify:track:fb");
+        var song = new TrackInfo("spotify:track:x", "アイドル", "YOASOBI");
+
+        var request = DialogueScriptGenerator.MakeRequest(corner, Djs, song, theme: "音楽", banterDirective: "");
+
+        Assert.DoesNotContain("掛け合い", request.Prompt);
     }
 
     [Fact]

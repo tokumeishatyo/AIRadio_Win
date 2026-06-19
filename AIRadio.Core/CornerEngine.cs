@@ -155,7 +155,8 @@ public sealed class CornerEngine
 
         var script = await generator.GenerateAsync(
             corner, cast, song, theme: theme, dateContext: dateContext, letter: letter,
-            greeting: context.Greeting, guest: guest, journalContext: context.JournalContext ?? "", ct: ct).ConfigureAwait(false);
+            greeting: context.Greeting, guest: guest, journalContext: context.JournalContext ?? "",
+            banterDirective: context.BanterDirective ?? "", ct: ct).ConfigureAwait(false);
         _onEvent?.Invoke(new CornerEvent.ScriptReady(script.Lines.Count, script.TotalCharacters));
 
         // 全行を事前合成（本番の TTS 待ちをゼロに。準備は OP・冒頭曲の再生中に進む想定）。
