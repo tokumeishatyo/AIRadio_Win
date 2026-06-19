@@ -21,4 +21,4 @@ speed_scale: 1.15
 aquestalk:
   voices_dir: "native/aqtk1"
   dict_dir: "native/aqk2k"
-  speed: 100   # 発話速度[%] 50-300（100=標準）
+  speed: 120   # 発話速度[%] 50-300（100=標準・120=約1.2倍／霊夢・魔理沙に適用。速さの微調整はこの値で）
