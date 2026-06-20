@@ -6,6 +6,9 @@
 .vs/
 artifacts/
 
+# ===== Installer output（秘密値/ native 同梱の setup.exe・絶対にコミットしない） =====
+installer/Output/
+
 # ===== Test =====
 [Tt]est[Rr]esults/
 *.trx
