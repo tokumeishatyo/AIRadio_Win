@@ -62,9 +62,13 @@ public sealed class CornerEngine
     private readonly TimeZoneInfo _timeZone;
     /// <summary>曜日名・記念日の暦コンテキスト（W17。省略時は <see cref="DailyCalendar.Standard"/>）。</summary>
     private readonly DailyCalendar _calendar;
+    /// <summary>演奏済みリング（W-DEDUP。null＝重複回避なし＝従来挙動）。締め曲の選曲で <see cref="PlayedSongHistory.TryReserve"/> し既出曲を避ける。</summary>
+    private readonly PlayedSongHistory? _songHistory;
 
     /// <param name="randomIndex">テーマプール選択用の乱数（W12。省略時は <see cref="Random.Shared"/>）。</param>
     /// <param name="timeZone">日付・季節コンテキストの解釈に使うタイムゾーン（W12。省略時は <see cref="TimeZoneInfo.Local"/>）。</param>
+    /// <param name="calendar">曜日名・記念日の暦コンテキスト（W17。省略時は <see cref="DailyCalendar.Standard"/>）。</param>
+    /// <param name="songHistory">演奏済みリング（W-DEDUP。末尾 optional。null なら重複回避なし＝従来挙動。締め曲の選曲で既出曲を避ける）。</param>
     public CornerEngine(
         ILLMBackend llm,
         ITTSBackend tts,
@@ -76,7 +80,8 @@ public sealed class CornerEngine
         Action<CornerEvent>? onEvent = null,
         Func<int, int>? randomIndex = null,
         TimeZoneInfo? timeZone = null,
-        DailyCalendar? calendar = null)
+        DailyCalendar? calendar = null,
+        PlayedSongHistory? songHistory = null)
     {
         _llm = llm;
         _tts = tts;
@@ -89,6 +94,7 @@ public sealed class CornerEngine
         _randomIndex = randomIndex ?? (n => Random.Shared.Next(n));
         _timeZone = timeZone ?? TimeZoneInfo.Local;
         _calendar = calendar ?? DailyCalendar.Standard;
+        _songHistory = songHistory;
     }
 
     /// <summary>準備 + 本番を続けて実行（単発デモ用）。</summary>
@@ -150,7 +156,7 @@ public sealed class CornerEngine
         }
 
         var song = await picker.PickAsync(
-            new SongRequest(songContext, corner.FallbackTrackUri, corner.SongPromptHint), ct).ConfigureAwait(false);
+            new SongRequest(songContext, corner.FallbackTrackUri, corner.SongPromptHint), ct, _songHistory).ConfigureAwait(false);
         _onEvent?.Invoke(new CornerEvent.SongPicked(song));
 
         var script = await generator.GenerateAsync(

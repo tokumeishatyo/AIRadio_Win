@@ -26,7 +26,13 @@ public sealed class SongPicker
         _temperature = temperature;
     }
 
-    public async Task<TrackInfo> PickAsync(SongRequest request, CancellationToken ct = default)
+    /// <param name="history">
+    /// 演奏済みリング（W-DEDUP）。<c>null</c> なら従来挙動（既出判定なし）。非 <c>null</c> のとき、各候補の先頭再生可能曲を
+    /// 原子的に <see cref="PlayedSongHistory.TryReserve"/> し、未既出（予約成功）の最初の曲を採用する。既出ならその候補を捨て次へ。
+    /// 全候補が再生不可 or 既出なら従来どおり <see cref="SongRequest.FallbackTrackUri"/> に倒す（fallback は予約しない＝記録しない）。
+    /// </param>
+    public async Task<TrackInfo> PickAsync(
+        SongRequest request, CancellationToken ct = default, PlayedSongHistory? history = null)
     {
         var raw = await _llm.GenerateAsync(MakeRequest(request, _temperature), ct).ConfigureAwait(false);
         foreach (var (title, artist) in ParseCandidates(raw).Take(MaxCandidates))
@@ -46,7 +52,9 @@ public sealed class SongPicker
                 continue;
             }
             var track = results.FirstOrDefault(t => t.IsPlayable);
-            if (track is not null)
+            // 再生可能 かつ（履歴なし or 予約成功＝未既出）なら採用。TryReserve が原子的に記録する（W-DEDUP）。
+            // track null（再生不可）・予約失敗（既出）はこの候補を捨てて次へ。
+            if (track is not null && (history is null || history.TryReserve(track)))
             {
                 return track;
             }

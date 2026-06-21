@@ -140,6 +140,12 @@ public sealed record ProgramBlueprint(
 {
     /// <summary>曜日替わり編成（先頭＝メイン。W13.5）。既定は <see cref="WeeklyCast.Standard"/>（program.yaml で上書き可）。</summary>
     public WeeklyCast WeeklyCast { get; init; } = WeeklyCast.Standard;
+
+    /// <summary>
+    /// 演奏済みリング（W-DEDUP）のサイズ。直近この曲数を覚えて選曲時に避ける。既定 100・0 で無効。
+    /// 負値は <see cref="PlayedSongHistory"/> ctor が 0 にクランプ（無効）。最初の放送で確定し以降使い回す（変更はアプリ再起動で反映＝WIRE-1）。
+    /// </summary>
+    public int RecentSongHistorySize { get; init; } = 100;
 }
 
 /// <summary>

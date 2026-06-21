@@ -16,6 +16,14 @@ internal sealed class BroadcastComposition
     private readonly string _configDir;
     private readonly IRadioLog _log;
 
+    /// <summary>
+    /// 演奏済みリング（W-DEDUP）。アプリ起動中ただ 1 つを保持し、<see cref="RunAsync"/>（放送ごと）を跨いで使い回す
+    /// （毎放送・同一放送内の重複を回避）。<c>TrayController</c> が composition を 1 度だけ生成するため、放送をまたいで保持される。
+    /// 最初の放送でサイズ確定（以降は使い回し＝サイズ変更はアプリ再起動で反映・WIRE-1）。<c>RunAsync</c> は <c>BroadcastSession</c> が
+    /// 多重放送を拒否し直列実行されるため <c>??=</c> の遅延初期化は非ロックで安全（並行するのは RunAsync 内の先読み準備＝TryReserve のロックで保護）。
+    /// </summary>
+    private PlayedSongHistory? _songHistory;
+
     public BroadcastComposition(string configDir, IRadioLog log)
     {
         _configDir = configDir;
@@ -61,6 +69,9 @@ internal sealed class BroadcastComposition
             var length = new ProgramLengthStore().Read() ?? blueprint.DefaultLength;
             var plan = new ProgramPlan(blueprint, length);
 
+            // 演奏済みリング（W-DEDUP）: アプリ起動中ただ 1 つを保持（放送跨ぎ）。最初の放送でサイズ確定・以降使い回す（WIRE-1）。
+            _songHistory ??= new PlayedSongHistory(blueprint.RecentSongHistorySize);
+
             // 共有インフラ。
             var http = new HttpClientAdapter();
             var clock = new SystemClock();
@@ -90,7 +101,8 @@ internal sealed class BroadcastComposition
                 llm, tts, audio, searcher, spotify, clock,
                 temperature: llmConfig.Temperature,
                 onEvent: e => _log.Log(FormatCornerEvent(e)),
-                calendar: calendar);
+                calendar: calendar,
+                songHistory: _songHistory);   // 締め曲も共有履歴で重複回避（W-DEDUP）。
             // アーティスト特集ランナー（W15）。onEvent を log へブリッジしないと FeatureSkipped（ART コード）が無出力になる（§18-32）。
             var artistFeatureEngine = new ArtistFeatureEngine(
                 llm, tts, audio, catalog, spotify, clock,
@@ -123,7 +135,8 @@ internal sealed class BroadcastComposition
                 artistFeatureRunner: artistFeatureEngine,
                 journalStore: journalStore,
                 journalSummarizer: journalSummarizer,
-                banterDirectives: banterDirectives);
+                banterDirectives: banterDirectives,
+                songHistory: _songHistory);   // 冒頭曲も共有履歴で重複回避（W-DEDUP）。
 
             var lengthLabel = plan.Length.IsEndless ? "エンドレス" : $"トーク{plan.Length.Corners}本";
             var countLabel = plan.TotalSegmentCount is int total ? $"・{total} セグメント" : "";
@@ -282,6 +295,8 @@ internal sealed class BroadcastComposition
         _ => "",
     };
 
+    // W-DEDUP（OBS-4）: 採用曲ログに trackURI を併記する。URI のみで dedup する判断を実運用で観察するため
+    //（同曲別 URI〔シングル/アルバム〕・カバーが URI 差で判別できる）。Title 空＝fallback に倒れた回は生の URI のみ表示。
     private static string Label(TrackInfo track)
-        => track.Title.Length == 0 ? track.Uri : $"{track.Artist} / {track.Title}";
+        => track.Title.Length == 0 ? track.Uri : $"{track.Artist} / {track.Title} ({track.Uri})";
 }

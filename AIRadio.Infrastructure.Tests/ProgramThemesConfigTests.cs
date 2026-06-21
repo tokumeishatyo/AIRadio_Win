@@ -179,6 +179,38 @@ public class ProgramThemesConfigTests
         Assert.Null(b.GuestCornerId);
     }
 
+    // --- program.yaml recent_song_history_size（W-DEDUP・WIRE-2） ---
+
+    [Fact]
+    public void Program_RecentSongHistorySize_Read()
+    {
+        var b = ProgramConfig.FromYaml(MinimalProgram + "  recent_song_history_size: 50\n");
+        Assert.Equal(50, b.RecentSongHistorySize);
+    }
+
+    [Fact]
+    public void Program_RecentSongHistorySize_Missing_DefaultsTo100()
+    {
+        var b = ProgramConfig.FromYaml(MinimalProgram);   // recent_song_history_size 省略
+        Assert.Equal(100, b.RecentSongHistorySize);
+    }
+
+    [Fact]
+    public void Program_RecentSongHistorySize_ExplicitZero_StaysZero()
+    {
+        // 明示 0（無効）は既定 100 で上書きせずそのまま尊重する。
+        var b = ProgramConfig.FromYaml(MinimalProgram + "  recent_song_history_size: 0\n");
+        Assert.Equal(0, b.RecentSongHistorySize);
+    }
+
+    [Fact]
+    public void Program_RecentSongHistorySize_Negative_PassedThrough_ForCtorToClamp()
+    {
+        // ローダは欠落補完のみ。負値はそのまま通し、0 クランプは PlayedSongHistory ctor の責務（WIRE-2）。
+        var b = ProgramConfig.FromYaml(MinimalProgram + "  recent_song_history_size: -5\n");
+        Assert.Equal(-5, b.RecentSongHistorySize);
+    }
+
     // --- program.yaml weekly_cast（W13.5） ---
 
     [Fact]

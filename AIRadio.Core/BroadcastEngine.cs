@@ -75,6 +75,9 @@ public sealed class BroadcastEngine
     /// <summary>掛け合いルール集（W-DLG。null＝掛け合い無効＝注入なし）。</summary>
     private readonly BanterDirectives? _banterDirectives;
 
+    /// <summary>演奏済みリング（W-DEDUP。null＝重複回避なし＝従来挙動）。冒頭曲の選曲で <see cref="PlayedSongHistory.TryReserve"/> し既出曲を避ける。</summary>
+    private readonly PlayedSongHistory? _songHistory;
+
     /// <param name="songPicker">冒頭曲の選曲（null・失敗時は <see cref="SongSegmentSpec.FallbackTrackUri"/> に倒す）。</param>
     /// <param name="newsAnnouncement">
     /// ニュース原稿を返すデリゲート。Core は Infrastructure（<c>NewsWeatherProvider</c>）を参照できないため
@@ -85,6 +88,8 @@ public sealed class BroadcastEngine
     /// <param name="artistFeatureRunner">アーティスト特集ランナー（W15。末尾 optional＝既存 positional 呼出を壊さない。特集無効なら不要）。</param>
     /// <param name="journalStore">長期記憶の永続化（W18。末尾 optional。null なら保存・注入なし＝従来挙動）。</param>
     /// <param name="journalSummarizer">ハイライト要約器（W18。末尾 optional。<paramref name="journalStore"/> と両方揃ったときだけ保存する）。</param>
+    /// <param name="banterDirectives">掛け合いルール集（W-DLG。末尾 optional。null なら注入なし＝従来挙動）。</param>
+    /// <param name="songHistory">演奏済みリング（W-DEDUP。末尾 optional。null なら重複回避なし＝従来挙動。冒頭曲の選曲で既出曲を避ける）。</param>
     public BroadcastEngine(
         ThemeSequencer themeSequencer,
         CornerEngine cornerRunner,
@@ -98,7 +103,8 @@ public sealed class BroadcastEngine
         ArtistFeatureEngine? artistFeatureRunner = null,
         IJournalStore? journalStore = null,
         JournalSummarizer? journalSummarizer = null,
-        BanterDirectives? banterDirectives = null)
+        BanterDirectives? banterDirectives = null,
+        PlayedSongHistory? songHistory = null)
     {
         _themeSequencer = themeSequencer;
         _cornerRunner = cornerRunner;
@@ -113,6 +119,7 @@ public sealed class BroadcastEngine
         _journalStore = journalStore;
         _journalSummarizer = journalSummarizer;
         _banterDirectives = banterDirectives;
+        _songHistory = songHistory;
     }
 
     /// <summary>番組を 1 本通しで実行する（単一のキャンセル可能 Task として呼ばれる前提）。</summary>
@@ -534,7 +541,7 @@ public sealed class BroadcastEngine
             try
             {
                 return await _songPicker
-                    .PickAsync(new SongRequest(context, spec.FallbackTrackUri, spec.PromptHint), ct)
+                    .PickAsync(new SongRequest(context, spec.FallbackTrackUri, spec.PromptHint), ct, _songHistory)
                     .ConfigureAwait(false);
             }
             catch (OperationCanceledException)

@@ -51,6 +51,8 @@ public static class ProgramConfig
             ArtistFeatureCornerId: program.ArtistFeature?.CornerId)
         {
             WeeklyCast = ParseWeeklyCast(program.WeeklyCast),
+            // W-DEDUP: 欠落（null）→ 既定 100。明示 0（無効）・負値はそのまま渡し、クランプは PlayedSongHistory ctor に一本化（WIRE-2）。
+            RecentSongHistorySize = program.RecentSongHistorySize ?? 100,
         };
     }
 
@@ -134,6 +136,7 @@ public static class ProgramConfig
         public TalkDto? Guest { get; set; }           // W14: ゲストコーナー（corner_id のみ）
         public TalkDto? ArtistFeature { get; set; }   // W15: アーティスト特集（corner_id のみ）
         public Dictionary<string, List<string>>? WeeklyCast { get; set; }
+        public int? RecentSongHistorySize { get; set; }   // W-DEDUP: 演奏済みリングのサイズ（欠落=null→既定100・0で無効）
     }
 
     public sealed class OpeningDto
